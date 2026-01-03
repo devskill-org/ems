@@ -81,7 +81,8 @@ type MinerScheduler struct {
 	weatherCache WeatherForecastCache
 
 	// MPC optimization results
-	mpcDecisions []mpc.ControlDecision
+	mpcDecisions          []mpc.ControlDecision
+	lastMPCExecutionError error // Tracks if last MPC execution failed
 
 	// Web server
 	webServer *WebServer
@@ -207,6 +208,7 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 	minersControlInitialDelay := s.getInitialDelay(now, config.CheckPriceInterval) + time.Second
 	pvDataInitialDelay := s.getInitialDelay(now, config.PVIntegrationPeriod)
 	stateCheckInitialDelay := s.getInitialDelay(now, config.MinersStateCheckInterval)
+	mpcExecutionInitialDelay := s.getInitialDelay(now, config.MPCExecutionInterval) + 2*time.Second
 
 	// Create periodic tasks
 	tasks := []PeriodicTask{
@@ -215,7 +217,7 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			initialDelay: 0, // Run immediately
 			interval:     config.MinerDiscoveryInterval,
 			runFunc: func() {
-				s.runMinerDiscovery(ctx)
+				s.RunMinerDiscovery(ctx)
 			},
 		},
 		{
@@ -224,7 +226,7 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			interval:     config.CheckPriceInterval,
 			runFunc: func() {
 				s.runPriceCheck(ctx)
-				s.runMPCOptimize(ctx)
+				s.RunMPCOptimize(ctx)
 			},
 		},
 		{
@@ -249,6 +251,14 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			interval:     config.PVIntegrationPeriod,
 			runFunc: func() {
 				s.runDataIntegration(dataSamples, config.PVPollInterval, dataDB, config.DeviceID, config.DryRun)
+			},
+		},
+		{
+			name:         "MPCExecution",
+			initialDelay: mpcExecutionInitialDelay,
+			interval:     config.MPCExecutionInterval,
+			runFunc: func() {
+				s.runMPCExecution()
 			},
 		},
 	}

@@ -65,16 +65,17 @@ type Config struct {
 	UserAgent             string        `json:"user_agent"`              // User agent for weather API client
 
 	// Battery/Inverter system configuration (MPC)
-	BatteryCapacity        float64 `json:"battery_capacity"`         // kWh
-	BatteryMaxCharge       float64 `json:"battery_max_charge"`       // kW
-	BatteryMaxDischarge    float64 `json:"battery_max_discharge"`    // kW
-	BatteryMinSOC          float64 `json:"battery_min_soc"`          // percentage (0-1)
-	BatteryMaxSOC          float64 `json:"battery_max_soc"`          // percentage (0-1)
-	BatteryEfficiency      float64 `json:"battery_efficiency"`       // round-trip efficiency (0-1)
-	BatteryDegradationCost float64 `json:"battery_degradation_cost"` // $/kWh cycled
-	MaxGridImport          float64 `json:"max_grid_import"`          // kW
-	MaxGridExport          float64 `json:"max_grid_export"`          // kW
-	MaxSolarPower          float64 `json:"max_solar_power"`          // kW - peak solar power capacity
+	BatteryCapacity        float64       `json:"battery_capacity"`         // kWh
+	BatteryMaxCharge       float64       `json:"battery_max_charge"`       // kW
+	BatteryMaxDischarge    float64       `json:"battery_max_discharge"`    // kW
+	BatteryMinSOC          float64       `json:"battery_min_soc"`          // percentage (0-1)
+	BatteryMaxSOC          float64       `json:"battery_max_soc"`          // percentage (0-1)
+	BatteryEfficiency      float64       `json:"battery_efficiency"`       // round-trip efficiency (0-1)
+	BatteryDegradationCost float64       `json:"battery_degradation_cost"` // $/kWh cycled
+	MaxGridImport          float64       `json:"max_grid_import"`          // kW
+	MaxGridExport          float64       `json:"max_grid_export"`          // kW
+	MaxSolarPower          float64       `json:"max_solar_power"`          // kW - peak solar power capacity
+	MPCExecutionInterval   time.Duration `json:"mpc_execution_interval"`   // How often to re-execute current MPC decision
 
 	// Price adjustments
 	ImportPriceOperatorFee float64 `json:"import_price_operator_fee"` // EUR/MWh - Operator fee for import
@@ -90,6 +91,7 @@ func DefaultConfig() *Config {
 		CheckPriceInterval:       15 * time.Minute,
 		MinersStateCheckInterval: 1 * time.Minute,
 		MinerDiscoveryInterval:   10 * time.Minute,
+		MPCExecutionInterval:     1 * time.Minute,
 		DryRun:                   false,
 		APITimeout:               30 * time.Second,
 		LogLevel:                 "info",
@@ -360,6 +362,7 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 		CheckInterval            string `json:"check_price_interval"`
 		MinersStateCheckInterval string `json:"miners_state_check_interval"`
 		MinerDiscoveryInterval   string `json:"miner_discovery_interval"`
+		MPCExecutionInterval     string `json:"mpc_execution_interval"`
 		APITimeout               string `json:"api_timeout"`
 		MinerTimeout             string `json:"miner_timeout"`
 		PVPollInterval           string `json:"pv_poll_interval"`
@@ -370,6 +373,7 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 		CheckInterval:            c.CheckPriceInterval.String(),
 		MinersStateCheckInterval: c.MinersStateCheckInterval.String(),
 		MinerDiscoveryInterval:   c.MinerDiscoveryInterval.String(),
+		MPCExecutionInterval:     c.MPCExecutionInterval.String(),
 		APITimeout:               c.APITimeout.String(),
 		MinerTimeout:             c.MinerTimeout.String(),
 		PVPollInterval:           c.PVPollInterval.String(),
@@ -386,6 +390,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		CheckPriceInterval       string `json:"check_price_interval"`
 		MinersStateCheckInterval string `json:"miners_state_check_interval"`
 		MinerDiscoveryInterval   string `json:"miner_discovery_interval"`
+		MPCExecutionInterval     string `json:"mpc_execution_interval"`
 		APITimeout               string `json:"api_timeout"`
 		MinerTimeout             string `json:"miner_timeout"`
 		UrlFormat                string `json:"url_format"`
@@ -422,6 +427,12 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	if aux.MinerDiscoveryInterval != "" {
 		if c.MinerDiscoveryInterval, err = time.ParseDuration(aux.MinerDiscoveryInterval); err != nil {
 			return fmt.Errorf("invalid miner_discovery_interval: %w", err)
+		}
+	}
+
+	if aux.MPCExecutionInterval != "" {
+		if c.MPCExecutionInterval, err = time.ParseDuration(aux.MPCExecutionInterval); err != nil {
+			return fmt.Errorf("invalid mpc_execution_interval: %w", err)
 		}
 	}
 

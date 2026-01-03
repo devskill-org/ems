@@ -41,8 +41,8 @@ func (s *MinerScheduler) discoverMiners(ctx context.Context) error {
 	return nil
 }
 
-// runMinerDiscovery runs the miner discovery process as a scheduled task
-func (s *MinerScheduler) runMinerDiscovery(ctx context.Context) {
+// RunMinerDiscovery runs the miner discovery process as a scheduled task
+func (s *MinerScheduler) RunMinerDiscovery(ctx context.Context) {
 	s.logger.Printf("Starting miner discovery task at %s", time.Now().Format(time.RFC3339))
 
 	if err := s.discoverMiners(ctx); err != nil {

@@ -12,8 +12,8 @@ import (
 	"github.com/sixdouglas/suncalc"
 )
 
-// runMPCOptimize executes the MPC optimization task
-func (s *MinerScheduler) runMPCOptimize(ctx context.Context) {
+// RunMPCOptimize executes the MPC optimization task
+func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) {
 	s.logger.Printf("Starting MPC optimization task at %s", time.Now().Format(time.RFC3339))
 
 	config := s.GetConfig()
@@ -75,6 +75,7 @@ func (s *MinerScheduler) runMPCOptimize(ctx context.Context) {
 	// Step 5: Save optimization results
 	s.mu.Lock()
 	s.mpcDecisions = decisions
+	s.lastMPCExecutionError = nil // Clear any previous execution error
 	s.mu.Unlock()
 
 	// Log summary
@@ -83,11 +84,18 @@ func (s *MinerScheduler) runMPCOptimize(ctx context.Context) {
 	for _, dec := range decisions {
 		totalProfit += dec.Profit
 	}
-	s.logger.Printf("Total expected profit over %d hours: €%.2f", len(decisions), totalProfit)
+	s.logger.Printf("Total expected profit over %d hours: %.2f EUR", len(decisions), totalProfit)
 
 	// Step 6: Execute the first control decision
-	if err := s.executeMPCDecision(&decisions[0], true); err != nil {
-		s.logger.Printf("Error executing MPC decision: %v", err)
+	err = s.executeMPCDecision(&decisions[0], config.DryRun)
+
+	// Record execution status
+	s.mu.Lock()
+	s.lastMPCExecutionError = err
+	s.mu.Unlock()
+
+	if err != nil {
+		s.logger.Printf("Error executing MPC decision: %v (will retry every minute)", err)
 		return
 	}
 
@@ -431,6 +439,129 @@ func (s *MinerScheduler) executeMPCDecision(decision *mpc.ControlDecision, dryRu
 		return nil
 	}
 
-	s.logger.Printf("Successfully executed MPC decision")
+	config := s.GetConfig()
+
+	// Connect to Plant Modbus server
+	client, err := sigenergy.NewTCPClient(config.PlantModbusAddress, sigenergy.PlantAddress)
+	if err != nil {
+		return fmt.Errorf("failed to connect to Plant Modbus: %w", err)
+	}
+	defer client.Close()
+
+	// Enable Remote EMS control
+	if err := client.EnableRemoteEMS(true); err != nil {
+		return fmt.Errorf("failed to enable remote EMS: %w", err)
+	}
+	s.logger.Printf("Enabled Remote EMS control")
+
+	// Determine control mode based on decision
+	var mode uint16
+
+	if decision.BatteryCharge > 0.01 {
+		// Battery should charge
+		// Mode 4: Command charging (PV first) - charge from PV, then grid if needed
+		mode = 4
+		chargeLimit := decision.BatteryCharge
+		s.logger.Printf("Setting battery to CHARGE mode: %.1f kW", chargeLimit)
+
+		// Set Remote EMS control mode
+		if err := client.SetRemoteEMSMode(mode); err != nil {
+			return fmt.Errorf("failed to set remote EMS mode: %w", err)
+		}
+
+		// Set ESS max charging limit
+		if err := client.SetESSMaxChargingLimit(chargeLimit); err != nil {
+			return fmt.Errorf("failed to set ESS charging limit: %w", err)
+		}
+
+	} else if decision.BatteryDischarge > 0.01 {
+		// Battery should discharge
+		// Mode 6: Command discharging (ESS first) - discharge from battery first
+		mode = 6
+		dischargeLimit := decision.BatteryDischarge
+		s.logger.Printf("Setting battery to DISCHARGE mode: %.1f kW", dischargeLimit)
+
+		// Set Remote EMS control mode
+		if err := client.SetRemoteEMSMode(mode); err != nil {
+			return fmt.Errorf("failed to set remote EMS mode: %w", err)
+		}
+
+		// Set ESS max discharging limit
+		if err := client.SetESSMaxDischargingLimit(dischargeLimit); err != nil {
+			return fmt.Errorf("failed to set ESS discharging limit: %w", err)
+		}
+
+	} else {
+		// Battery should stay idle - MPC wants to maintain SOC and use grid import/export
+		// Set minimal charge/discharge limits to prevent battery participation
+		// Use mode 4 (command charging) with minimal limits to keep battery idle
+		mode = 4
+		minimalLimit := 0.0 // Zero limit to keep battery completely idle
+		s.logger.Printf("Setting battery to IDLE mode (minimal limits): GridImport: %.1f kW, GridExport: %.1f kW",
+			decision.GridImport, decision.GridExport)
+
+		// Set Remote EMS control mode
+		if err := client.SetRemoteEMSMode(mode); err != nil {
+			return fmt.Errorf("failed to set remote EMS mode: %w", err)
+		}
+
+		// Set minimal charging and discharging limits to effectively disable battery use
+		if err := client.SetESSMaxChargingLimit(minimalLimit); err != nil {
+			return fmt.Errorf("failed to set ESS charging limit: %w", err)
+		}
+		if err := client.SetESSMaxDischargingLimit(minimalLimit); err != nil {
+			return fmt.Errorf("failed to set ESS discharging limit: %w", err)
+		}
+	}
+
+	s.logger.Printf("Successfully executed MPC decision - Mode: %d, SOC: %.1f%%, GridImport: %.1f kW, GridExport: %.1f kW",
+		mode, decision.BatterySOC*100, decision.GridImport, decision.GridExport)
+
 	return nil
+}
+
+// runMPCExecution re-executes the current MPC decision only if previous execution failed
+// This ensures the decision is applied even if previous execution failed
+func (s *MinerScheduler) runMPCExecution() {
+
+	// Check if last execution failed
+	s.mu.RLock()
+	lastError := s.lastMPCExecutionError
+	if lastError == nil {
+		// Last execution succeeded, no need to retry
+		s.mu.RUnlock()
+		return
+	}
+
+	config := s.GetConfig()
+
+	// Check if Plant Modbus Address is configured
+	if config.PlantModbusAddress == "" {
+		s.mu.RUnlock()
+		return
+	}
+
+	// Get current MPC decision
+	if len(s.mpcDecisions) == 0 {
+		s.mu.RUnlock()
+		return
+	}
+	currentDecision := s.mpcDecisions[0]
+	s.mu.RUnlock()
+
+	s.logger.Printf("Retrying MPC decision execution (previous error: %v)", lastError)
+
+	// Execute the current decision
+	err := s.executeMPCDecision(&currentDecision, config.DryRun)
+
+	s.mu.Lock()
+	s.lastMPCExecutionError = err
+	s.mu.Unlock()
+
+	if err != nil {
+		s.logger.Printf("Error retrying MPC decision: %v (will retry again in 1 minute)", err)
+		return
+	}
+
+	s.logger.Printf("Successfully retried MPC decision execution")
 }

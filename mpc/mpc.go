@@ -244,12 +244,20 @@ func (mpc *MPCController) calculateProfit(dec ControlDecision, slot TimeSlot) fl
 	// When we discharge battery to support load, we avoid importing at current price
 	// When we charge battery from grid, we pay current price but can use it later at higher prices
 
-	// Actual energy delivered from battery (accounting for efficiency)
-	batteryDischargeEnergy := dec.BatteryDischarge // kWh delivered
+	// Effective energy delivered from battery (accounting for efficiency)
+	batteryDischargeEnergy := dec.BatteryDischarge * mpc.Config.BatteryEfficiency
 
-	// The discharge value: we avoid importing power at the current price
-	// This is beneficial when import price is high
-	dischargeValue := batteryDischargeEnergy * mpc.Config.BatteryEfficiency * slot.ImportPrice
+	// Calculate how much battery energy went to LOAD vs EXPORT
+	// From power balance: Solar + BatteryDischarge*eff = Load + BatteryCharge/eff + GridExport - GridImport
+	// Battery discharge that supports load (avoiding imports):
+	netLoad := slot.LoadForecast + dec.BatteryCharge/mpc.Config.BatteryEfficiency
+	netSupplyBeforeBattery := slot.SolarForecast
+	loadDeficit := math.Max(0, netLoad-netSupplyBeforeBattery)
+	batteryDischargeToLoad := math.Min(batteryDischargeEnergy, loadDeficit)
+
+	// The discharge value: we avoid importing power at the current price for the energy used to support load
+	// Energy exported is already valued in the revenue calculation, so we exclude it here
+	dischargeValue := batteryDischargeToLoad * slot.ImportPrice
 
 	// The charge cost: we store energy for future use
 	// This is beneficial when import price is low (to use when prices are high)
@@ -261,9 +269,9 @@ func (mpc *MPCController) calculateProfit(dec ControlDecision, slot TimeSlot) fl
 	degradationCost := batteryThroughput * mpc.Config.BatteryDegradationCost
 
 	// Net profit calculation:
-	// + Revenue from exports
+	// + Revenue from exports (includes any battery energy exported)
 	// - Cost of imports (includes grid charging of battery)
-	// + Value from discharging battery (avoids expensive imports)
+	// + Value from discharging battery to support load (avoids expensive imports)
 	// - Cost of charging losses
 	// - Battery degradation
 	profit := revenue - importCost + dischargeValue - chargeLoss - degradationCost

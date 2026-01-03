@@ -103,6 +103,7 @@ func testConfigWithServer(server *httptest.Server) *Config {
 		PVIntegrationPeriod:      15 * time.Minute,
 		APITimeout:               5 * time.Second,
 		MinerTimeout:             5 * time.Second,
+		MPCExecutionInterval:     time.Minute,
 		Location:                 "Europe/Riga",
 		SecurityToken:            "test-token",
 		UrlFormat:                urlFormat,

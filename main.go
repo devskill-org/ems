@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/devskill-org/ems/scheduler"
 	"github.com/devskill-org/ems/sigenergy"
@@ -20,6 +21,7 @@ func main() {
 		info       = flag.Bool("info", false, "Show Plant Information")
 		help       = flag.Bool("help", false, "Show help message")
 		serverOnly = flag.Bool("serverOnly", false, "Run only web server without periodic checks")
+		mpc        = flag.Bool("mpc", false, "Run MPC optimization once and log all decisions")
 	)
 	flag.Parse()
 
@@ -41,6 +43,12 @@ func main() {
 		}
 		return
 	}
+
+	if *mpc {
+		runMPCOptimize(config)
+		return
+	}
+
 	fmt.Printf("Starting Energy Management System with the following configuration:\n")
 	fmt.Printf("  Price Limit: %.2f EUR/MWh\n", config.PriceLimit)
 	fmt.Printf("  Network: %s\n", config.Network)
@@ -91,6 +99,67 @@ func main() {
 	logger.Printf("Scheduler stopped successfully")
 }
 
+func runMPCOptimize(config *scheduler.Config) {
+	logger := log.New(os.Stdout, "[MPC] ", log.LstdFlags)
+
+	// Create scheduler (needed for MPC functionality)
+	minerScheduler := scheduler.NewMinerSchedulerWithHealthCheck(config, logger)
+
+	ctx := context.Background()
+
+	minerScheduler.RunMinerDiscovery(ctx)
+
+	// Run MPC optimization
+	logger.Printf("Running MPC optimization...")
+	minerScheduler.RunMPCOptimize(ctx)
+
+	// Get and log all decisions
+	decisions := minerScheduler.GetMPCDecisions()
+	if len(decisions) == 0 {
+		logger.Printf("No MPC decisions were generated")
+		return
+	}
+
+	fmt.Println("\n========================================")
+	fmt.Println("MPC OPTIMIZATION RESULTS")
+	fmt.Println("========================================")
+	fmt.Printf("Total decisions: %d\n\n", len(decisions))
+
+	// Print table header
+	fmt.Println("┌──────┬─────────────────────┬──────────┬─────────┬───────────┬────────────┬────────────┬────────────┬──────────┬────────────┬────────────┬──────────┐")
+	fmt.Println("│ Hour │     Timestamp       │ Batt SOC │ Bat Chr │ Bat Disch │ Grid Imprt │ Grid Exprt │ Solar Fcst │ Load Fst │ Imprt Prce │ Exprt Prce │  Profit  │")
+	fmt.Println("│      │                     │    (%)   │  (kW)   │   (kW)    │    (kW)    │    (kW)    │    (kW)    │   (kW)   │ (EUR/MWh)  │ (EUR/MWh)  │   (EUR)  │")
+	fmt.Println("├──────┼─────────────────────┼──────────┼─────────┼───────────┼────────────┼────────────┼────────────┼──────────┼────────────┼────────────┼──────────┤")
+
+	totalProfit := 0.0
+	for _, dec := range decisions {
+		timestamp := time.Unix(dec.Timestamp, 0).Format("2006-01-02 15:04")
+		fmt.Printf("│ %4d │ %19s │  %6.1f  │  %5.2f  │   %6.2f  │   %6.2f   │   %6.2f   │   %6.2f   │  %6.2f  │   %6.2f   │   %6.2f   │  %6.4f  │\n",
+			dec.Hour,
+			timestamp,
+			dec.BatterySOC*100,
+			dec.BatteryCharge,
+			dec.BatteryDischarge,
+			dec.GridImport,
+			dec.GridExport,
+			dec.SolarForecast,
+			dec.LoadForecast,
+			dec.ImportPrice*1000,
+			dec.ExportPrice*1000,
+			dec.Profit,
+		)
+		totalProfit += dec.Profit
+	}
+
+	fmt.Println("└──────┴─────────────────────┴──────────┴─────────┴───────────┴────────────┴────────────┴────────────┴──────────┴────────────┴────────────┴──────────┘")
+	fmt.Println("\n========================================")
+	fmt.Println("SUMMARY")
+	fmt.Println("========================================")
+	fmt.Printf("Total expected profit: %.2f EUR\n", totalProfit)
+	fmt.Printf("Optimization horizon:  %d hours\n", len(decisions))
+	fmt.Println("========================================")
+}
+
 func showHelp() {
 	fmt.Println("Energy Management System (EMS) - Optimize energy consumption, production, and storage")
 	fmt.Println()
@@ -125,6 +194,9 @@ func showHelp() {
 	fmt.Println()
 	fmt.Println("  # Run only web server without periodic checks")
 	fmt.Println("  ems -serverOnly")
+	fmt.Println()
+	fmt.Println("  # Run MPC optimization once and log all decisions")
+	fmt.Println("  ems -mpc")
 	fmt.Println()
 	fmt.Println("  # Show this help")
 	fmt.Println("  ems -help")
