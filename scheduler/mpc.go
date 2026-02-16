@@ -50,6 +50,9 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 	s.logger.Printf("Built forecast with %d time slots", len(forecast))
 
 	// Step 3: Create MPC controller
+	// Calculate time slot duration in hours from CheckPriceInterval
+	timeSlotDuration := config.CheckPriceInterval.Hours()
+
 	systemConfig := mpc.SystemConfig{
 		BatteryCapacity:             config.BatteryCapacity,
 		BatteryMaxCharge:            config.BatteryMaxCharge,
@@ -63,6 +66,7 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 		BatteryPreHeatPower:         config.BatteryPreHeatPower,
 		BatteryPreHeatTempThreshold: config.BatteryPreHeatTempThreshold,
 		BatteryThermalTimeConstant:  config.BatteryThermalTimeConstant,
+		TimeSlotDuration:            timeSlotDuration,
 	}
 
 	horizon := len(forecast)

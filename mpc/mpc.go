@@ -18,7 +18,8 @@ type SystemConfig struct {
 	MaxGridExport               float64 // kW
 	BatteryPreHeatPower         float64 // kW - power consumption of battery preheating when active
 	BatteryPreHeatTempThreshold float64 // °C - temperature threshold below which battery preheating activates
-	BatteryThermalTimeConstant  float64 // fraction per time slot - rate at which battery temperature approaches air temperature (0-1)
+	BatteryThermalTimeConstant  float64 // fraction per hour - rate at which battery temperature approaches air temperature (0-1). This is automatically scaled based on TimeSlotDuration.
+	TimeSlotDuration            float64 // hours - duration of each time slot (e.g., 0.25 for 15 minutes, 1.0 for 1 hour). MUST match CheckPriceInterval configuration.
 }
 
 // TimeSlot represents one time period of operation (typically 15 minutes, configurable via check_price_interval)
@@ -60,10 +61,10 @@ type ControlDecision struct {
 
 // Controller implements Model Predictive Control
 type Controller struct {
-	Config                SystemConfig
-	Horizon               int     // number of time periods to look ahead
-	CurrentSOC            float64
-	CurrentBatteryTemp    float64 // °C current battery temperature
+	Config             SystemConfig
+	Horizon            int // number of time periods to look ahead
+	CurrentSOC         float64
+	CurrentBatteryTemp float64 // °C current battery temperature
 }
 
 // NewController creates a new MPC controller
@@ -220,12 +221,31 @@ func (mpc *Controller) calculateNextBatteryTemp(currentTemp, airTemp float64, is
 		// When charging with preheat, battery maintains temperature at threshold
 		return math.Max(currentTemp, mpc.Config.BatteryPreHeatTempThreshold)
 	}
-	
+
+	// Get time slot duration (default to 1 hour if not specified for backward compatibility)
+	timeSlotDuration := mpc.Config.TimeSlotDuration
+	if timeSlotDuration == 0 {
+		timeSlotDuration = 1.0
+	}
+
+	// Scale thermal time constant by time slot duration
+	// BatteryThermalTimeConstant is defined per hour, so we scale it for the actual slot duration
+	// For small k: k_slot ≈ k_hour * slot_duration_hours
+	// For larger k, use exponential formula: k_slot = 1 - (1 - k_hour)^slot_duration_hours
+	thermalConstant := mpc.Config.BatteryThermalTimeConstant
+	if thermalConstant < 0.2 {
+		// Use linear approximation for small values (more efficient)
+		thermalConstant = thermalConstant * timeSlotDuration
+	} else {
+		// Use exponential formula for larger values (more accurate)
+		thermalConstant = 1.0 - math.Pow(1.0-thermalConstant, timeSlotDuration)
+	}
+
 	// When not charging or warm enough, battery temperature moves toward air temperature
 	// T(t+1) = T(t) + k * (T_air - T(t))
 	// This models natural cooling/heating toward ambient air temperature
 	tempDiff := airTemp - currentTemp
-	return currentTemp + mpc.Config.BatteryThermalTimeConstant*tempDiff
+	return currentTemp + thermalConstant*tempDiff
 }
 
 // generateFeasibleDecisions creates a set of feasible control decisions
@@ -281,7 +301,7 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 	for _, action := range batteryActions {
 		// Battery preheating is only active when we're actually charging and temp is below threshold
 		preHeatActive := needsPreHeat && action.charge > 0
-		
+
 		dec := ControlDecision{
 			Hour:                 slot.Hour,
 			Timestamp:            slot.Timestamp,
@@ -294,12 +314,12 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 		// When battery preheating is active (battery is charging at low temp), it consumes extra power from the grid
 		netSolar := slot.SolarForecast
 		extraLoad := 0.0
-		
+
 		// Battery preheating only consumes power when battery is charging
 		if preHeatActive {
 			extraLoad = preHeatPower
 		}
-		
+
 		netLoad := slot.LoadForecast + action.charge/mpc.Config.BatteryEfficiency + extraLoad
 		netSupply := netSolar + action.discharge*mpc.Config.BatteryEfficiency
 
@@ -329,15 +349,25 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 // Therefore, GridImport and GridExport already reflect the effect of battery operations and battery preheating.
 // Profit is simply: revenue from exports - cost of imports - degradation cost
 // Note: The battery preheating cost is already included in GridImport when battery is charging at low temperatures
+// All power values (kW) are multiplied by time slot duration (hours) to get energy (kWh)
 func (mpc *Controller) calculateProfit(dec ControlDecision, slot TimeSlot) float64 {
+	// Get time slot duration (default to 1 hour if not specified for backward compatibility)
+	timeSlotDuration := mpc.Config.TimeSlotDuration
+	if timeSlotDuration == 0 {
+		timeSlotDuration = 1.0
+	}
+
 	// Revenue from exporting to grid
-	revenue := dec.GridExport * slot.ExportPrice
+	// GridExport is in kW, multiply by time slot duration to get kWh
+	revenue := dec.GridExport * slot.ExportPrice * timeSlotDuration
 
 	// Cost of importing from grid (already includes battery preheating consumption when active)
-	importCost := dec.GridImport * slot.ImportPrice
+	// GridImport is in kW, multiply by time slot duration to get kWh
+	importCost := dec.GridImport * slot.ImportPrice * timeSlotDuration
 
 	// Battery degradation cost (wear and tear from cycling)
-	batteryThroughput := dec.BatteryCharge + dec.BatteryDischarge
+	// Throughput is in kW, multiply by time slot duration to get kWh cycled
+	batteryThroughput := (dec.BatteryCharge + dec.BatteryDischarge) * timeSlotDuration
 	degradationCost := batteryThroughput * mpc.Config.BatteryDegradationCost
 
 	// Net profit:
@@ -358,18 +388,42 @@ func (mpc *Controller) calculateProfit(dec ControlDecision, slot TimeSlot) float
 
 // Helper functions
 func (mpc *Controller) canCharge(soc, charge float64) bool {
-	newSOC := soc + (charge / mpc.Config.BatteryCapacity)
+	// Get time slot duration (default to 1 hour if not specified for backward compatibility)
+	timeSlotDuration := mpc.Config.TimeSlotDuration
+	if timeSlotDuration == 0 {
+		timeSlotDuration = 1.0
+	}
+
+	// Convert power (kW) to energy (kWh) by multiplying by time slot duration
+	chargeEnergy := charge * timeSlotDuration
+	newSOC := soc + (chargeEnergy / mpc.Config.BatteryCapacity)
 	return newSOC <= mpc.Config.BatteryMaxSOC
 }
 
 func (mpc *Controller) canDischarge(soc, discharge float64) bool {
-	newSOC := soc - (discharge / mpc.Config.BatteryCapacity)
+	// Get time slot duration (default to 1 hour if not specified for backward compatibility)
+	timeSlotDuration := mpc.Config.TimeSlotDuration
+	if timeSlotDuration == 0 {
+		timeSlotDuration = 1.0
+	}
+
+	// Convert power (kW) to energy (kWh) by multiplying by time slot duration
+	dischargeEnergy := discharge * timeSlotDuration
+	newSOC := soc - (dischargeEnergy / mpc.Config.BatteryCapacity)
 	return newSOC >= mpc.Config.BatteryMinSOC
 }
 
 func (mpc *Controller) calculateNewSOC(currentSOC, charge, discharge float64) float64 {
-	chargeEnergy := charge * mpc.Config.BatteryEfficiency
-	socChange := (chargeEnergy - discharge) / mpc.Config.BatteryCapacity
+	// Get time slot duration (default to 1 hour if not specified for backward compatibility)
+	timeSlotDuration := mpc.Config.TimeSlotDuration
+	if timeSlotDuration == 0 {
+		timeSlotDuration = 1.0
+	}
+
+	// Convert power (kW) to energy (kWh) by multiplying by time slot duration
+	chargeEnergy := charge * timeSlotDuration * mpc.Config.BatteryEfficiency
+	dischargeEnergy := discharge * timeSlotDuration
+	socChange := (chargeEnergy - dischargeEnergy) / mpc.Config.BatteryCapacity
 	newSOC := currentSOC + socChange
 	return math.Max(mpc.Config.BatteryMinSOC, math.Min(mpc.Config.BatteryMaxSOC, newSOC))
 }

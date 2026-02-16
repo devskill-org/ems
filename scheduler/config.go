@@ -66,20 +66,20 @@ type Config struct {
 	UserAgent             string        `json:"user_agent"`              // User agent for weather API client
 
 	// Battery/Inverter system configuration (MPC)
-	BatteryCapacity        float64       `json:"battery_capacity"`         // kWh
-	BatteryMaxCharge       float64       `json:"battery_max_charge"`       // kW
-	BatteryMaxDischarge    float64       `json:"battery_max_discharge"`    // kW
-	BatteryMinSOC          float64       `json:"battery_min_soc"`          // percentage (0-1)
-	BatteryMaxSOC          float64       `json:"battery_max_soc"`          // percentage (0-1)
-	BatteryEfficiency      float64       `json:"battery_efficiency"`       // round-trip efficiency (0-1)
-	BatteryDegradationCost float64       `json:"battery_degradation_cost"` // $/kWh cycled
-	MaxGridImport          float64       `json:"max_grid_import"`          // kW
-	MaxGridExport                 float64       `json:"max_grid_export"`                   // kW
-	MaxSolarPower                 float64       `json:"max_solar_power"`                   // kW - peak solar power capacity
-	MPCExecutionInterval          time.Duration `json:"mpc_execution_interval"`            // How often to re-execute current MPC decision
-	BatteryPreHeatPower           float64       `json:"battery_preheat_power"`             // kW - power consumption of battery preheating when active
-	BatteryPreHeatTempThreshold   float64       `json:"battery_preheat_temp_threshold"`    // °C - temperature threshold below which battery preheating activates
-	BatteryThermalTimeConstant    float64       `json:"battery_thermal_time_constant"`     // fraction per time slot - rate at which battery temperature approaches air temperature (0-1)
+	BatteryCapacity             float64       `json:"battery_capacity"`               // kWh
+	BatteryMaxCharge            float64       `json:"battery_max_charge"`             // kW
+	BatteryMaxDischarge         float64       `json:"battery_max_discharge"`          // kW
+	BatteryMinSOC               float64       `json:"battery_min_soc"`                // percentage (0-1)
+	BatteryMaxSOC               float64       `json:"battery_max_soc"`                // percentage (0-1)
+	BatteryEfficiency           float64       `json:"battery_efficiency"`             // round-trip efficiency (0-1)
+	BatteryDegradationCost      float64       `json:"battery_degradation_cost"`       // $/kWh cycled
+	MaxGridImport               float64       `json:"max_grid_import"`                // kW
+	MaxGridExport               float64       `json:"max_grid_export"`                // kW
+	MaxSolarPower               float64       `json:"max_solar_power"`                // kW - peak solar power capacity
+	MPCExecutionInterval        time.Duration `json:"mpc_execution_interval"`         // How often to re-execute current MPC decision
+	BatteryPreHeatPower         float64       `json:"battery_preheat_power"`          // kW - power consumption of battery preheating when active
+	BatteryPreHeatTempThreshold float64       `json:"battery_preheat_temp_threshold"` // °C - temperature threshold below which battery preheating activates
+	BatteryThermalTimeConstant  float64       `json:"battery_thermal_time_constant"`  // fraction per hour - rate at which battery temperature approaches air temperature (0-1), automatically scaled for time slot duration
 
 	// Price adjustments
 	ImportPriceOperatorFee float64 `json:"import_price_operator_fee"` // EUR/MWh - Operator fee for import
@@ -90,50 +90,50 @@ type Config struct {
 // DefaultConfig returns a configuration with default values
 func DefaultConfig() *Config {
 	return &Config{
-		PriceLimit:               60.0,
-		Network:                  "192.168.88.0/24",
-		CheckPriceInterval:       15 * time.Minute,
-		MinersStateCheckInterval: 1 * time.Minute,
-		MinerDiscoveryInterval:   10 * time.Minute,
-		MPCExecutionInterval:     1 * time.Minute,
-		DryRun:                   false,
-		APITimeout:               30 * time.Second,
-		LogLevel:                 "info",
-		LogFormat:                "text",
-		MinerTimeout:             5 * time.Second,
-		HealthCheckPort:          0,
-		DeviceID:                 0,
-		PVPollInterval:           10 * time.Second,
-		PVIntegrationPeriod:      15 * time.Minute,
-		PostgresConnString:       "",
-		URLFormat:                "https://web-api.tp.entsoe.eu/api?documentType=A44&out_Domain=10YLV-1001A00074&in_Domain=10YLV-1001A00074&periodStart=%s&periodEnd=%s&securityToken=%s",
-		PlantModbusAddress:       "",
-		Latitude:                 56.9496, // Riga, Latvia
-		Longitude:                24.1052, // Riga, Latvia
-		WeatherUpdateInterval:    1 * time.Hour,
-		UserAgent:                "MyApp/1.0 (username@example.com)",
-		BatteryCapacity:          24.0,  // 24 kWh
-		BatteryMaxCharge:         12.0,  // 12 kW
-		BatteryMaxDischarge:      12.0,  // 12 kW
-		BatteryMinSOC:            0.0,   // 0%
-		BatteryMaxSOC:            1.0,   // 100%
-		BatteryEfficiency:        0.92,  // 92% round-trip
-		BatteryDegradationCost:   0.0,   // $0.00 per kWh cycled
-		MaxGridImport:            30.0,  // 30 kW
-		MaxGridExport:            30.0,  // 30 kW
-		MaxSolarPower:            30.0,  // 30 kW peak solar power
-		ImportPriceOperatorFee:   8.5,   // 8.5 EUR/MWh from Operator
-		ImportPriceDeliveryFee:   40.0,  // 40 EUR/MWh for delivery
-		ExportPriceOperatorFee:   17.0,  // 17 EUR/MWh from Operator
-		MinersPowerLimit:         30.0,  // 30 kW total power limit for miners
-		MinerPowerStandby:        0.05,  // 0.05 kW (50 W) in standby
-		MinerPowerEco:            0.8,   // 0.8 kW (800 W) in eco mode
+		PriceLimit:                  60.0,
+		Network:                     "192.168.88.0/24",
+		CheckPriceInterval:          15 * time.Minute,
+		MinersStateCheckInterval:    1 * time.Minute,
+		MinerDiscoveryInterval:      10 * time.Minute,
+		MPCExecutionInterval:        1 * time.Minute,
+		DryRun:                      false,
+		APITimeout:                  30 * time.Second,
+		LogLevel:                    "info",
+		LogFormat:                   "text",
+		MinerTimeout:                5 * time.Second,
+		HealthCheckPort:             0,
+		DeviceID:                    0,
+		PVPollInterval:              10 * time.Second,
+		PVIntegrationPeriod:         15 * time.Minute,
+		PostgresConnString:          "",
+		URLFormat:                   "https://web-api.tp.entsoe.eu/api?documentType=A44&out_Domain=10YLV-1001A00074&in_Domain=10YLV-1001A00074&periodStart=%s&periodEnd=%s&securityToken=%s",
+		PlantModbusAddress:          "",
+		Latitude:                    56.9496, // Riga, Latvia
+		Longitude:                   24.1052, // Riga, Latvia
+		WeatherUpdateInterval:       1 * time.Hour,
+		UserAgent:                   "MyApp/1.0 (username@example.com)",
+		BatteryCapacity:             24.0,  // 24 kWh
+		BatteryMaxCharge:            12.0,  // 12 kW
+		BatteryMaxDischarge:         12.0,  // 12 kW
+		BatteryMinSOC:               0.0,   // 0%
+		BatteryMaxSOC:               1.0,   // 100%
+		BatteryEfficiency:           0.92,  // 92% round-trip
+		BatteryDegradationCost:      0.0,   // $0.00 per kWh cycled
+		MaxGridImport:               30.0,  // 30 kW
+		MaxGridExport:               30.0,  // 30 kW
+		MaxSolarPower:               30.0,  // 30 kW peak solar power
+		ImportPriceOperatorFee:      8.5,   // 8.5 EUR/MWh from Operator
+		ImportPriceDeliveryFee:      40.0,  // 40 EUR/MWh for delivery
+		ExportPriceOperatorFee:      17.0,  // 17 EUR/MWh from Operator
+		MinersPowerLimit:            30.0,  // 30 kW total power limit for miners
+		MinerPowerStandby:           0.05,  // 0.05 kW (50 W) in standby
+		MinerPowerEco:               0.8,   // 0.8 kW (800 W) in eco mode
 		MinerPowerStandard:          1.6,   // 1.6 kW (1600 W) in standard mode
 		MinerPowerSuper:             1.8,   // 1.8 kW (1800 W) in super mode
 		UsePVPowerControl:           false, // Disabled by default
 		BatteryPreHeatPower:         0.7,   // 0.7 kW (700 W) battery preheating power
 		BatteryPreHeatTempThreshold: 10.0,  // 10°C - activate battery preheating below this temperature
-		BatteryThermalTimeConstant:  0.05,   // 0.05 - battery temperature moves 50% toward air temp per time slot when not charging
+		BatteryThermalTimeConstant:  0.05,  // 0.05 - battery temperature moves 5% toward air temp per hour (auto-scaled for time slot duration)
 	}
 }
 

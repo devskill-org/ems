@@ -22,6 +22,7 @@ func main() {
 		BatteryDegradationCost: 0.05, // $0.05 per kWh cycled
 		MaxGridImport:          10.0, // 10 kW
 		MaxGridExport:          10.0, // 10 kW
+		TimeSlotDuration:       1.0,  // 1 hour per time slot (use 0.25 for 15-minute intervals)
 	}
 
 	// Create MPC controller with 24-hour horizon using hourly time slots
