@@ -168,6 +168,7 @@ function App() {
             >
               <PowerDisplay
                 value={health?.ems?.current_pv_power}
+                invertColors={true}
                 style={{ position: "absolute", top: "202px", right: "170px" }}
               />
             </div>
@@ -182,7 +183,6 @@ function App() {
             >
               <PowerDisplay
                 value={health?.ems?.ess_power}
-                invertColors={true}
                 label={
                   health?.ems?.ess_soc !== undefined
                     ? `${health.ems.ess_soc.toFixed(1)}%`

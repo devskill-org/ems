@@ -20,7 +20,7 @@ export function PowerDisplay({
   showLabel = false,
 }: PowerDisplayProps) {
   const displayValue =
-    value !== undefined ? `${value.toFixed(decimals)} ${unit}` : "N/A";
+    value !== undefined ? `${Math.abs(value).toFixed(decimals)} ${unit}` : "N/A";
   const color = getPowerColor(value, invertColors);
 
   return (
