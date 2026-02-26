@@ -1,0 +1,58 @@
+{
+  "battery_capacity": 24.0,
+  "battery_efficiency": 0.95,
+  "optimization_interval_minutes": 15,
+  "use_dynamic_programming": true,
+
+  "controller": {
+    "type": "simulated",
+    "base_url": "",
+    "api_key": "",
+    "host": "",
+    "port": 0,
+    "unit_id": 1,
+    "battery_capacity": 24.0,
+    "timeout": 30
+  },
+
+  "market_api": {
+    "provider": "mock",
+    "api_key": "your_market_api_key_here",
+    "region": "NO1",
+    "currency": "USD"
+  },
+
+  "weather_api": {
+    "provider": "mock",
+    "api_key": "your_weather_api_key_here",
+    "latitude": 59.9139,
+    "longitude": 10.7522,
+    "solar_panel_capacity": 30.0,
+    "panel_efficiency": 0.20,
+    "tilt_angle": 45.0,
+    "azimuth_angle": 180.0
+  },
+
+  "database": {
+    "type": "sqlite",
+    "connection_string": "solar_controller.db",
+    "auto_migrate": true
+  },
+
+  "web_server": {
+    "enabled": false,
+    "host": "0.0.0.0",
+    "port": 8080,
+    "cors_enabled": true,
+    "auth_required": false
+  },
+
+  "safety": {
+    "max_charge_rate": 10.0,
+    "max_discharge_rate": 10.0,
+    "min_battery_level": 0.1,
+    "max_battery_level": 0.95,
+    "emergency_stop_on_error": true,
+    "max_consecutive_failures": 3
+  }
+}

@@ -168,12 +168,13 @@ func (s *MinerScheduler) buildMPCForecast(ctx context.Context, config *Config, p
 		weatherForecast = nil
 	}
 
-	// Pre-compute hourly solar and weather forecasts (cache for efficiency)
-	// Solar forecasts are typically hourly, so we compute them once and reuse for all 15-min slots in each hour
+	slotDuration := config.CheckPriceInterval
+
+	// Pre-compute solar and weather forecasts at slotDuration resolution
 	var solarForecasts map[int]float64
 	var weatherData map[int]WeatherData
 	if weatherForecast != nil {
-		solarForecasts, weatherData, err = s.getSolarForecast(config, now, weatherForecast, plantInfo)
+		solarForecasts, weatherData, err = s.getSolarForecast(config, now, slotDuration, weatherForecast, plantInfo)
 		if err != nil {
 			s.logger.Printf("Warning: failed to get solar forecast: %v, using zero solar", err)
 			solarForecasts = make(map[int]float64)
@@ -182,13 +183,6 @@ func (s *MinerScheduler) buildMPCForecast(ctx context.Context, config *Config, p
 	} else {
 		solarForecasts = make(map[int]float64)
 		weatherData = make(map[int]WeatherData)
-	}
-
-	// Determine time slot duration based on CheckPriceInterval
-	// Default to 15 minutes if not configured
-	slotDuration := config.CheckPriceInterval
-	if slotDuration == 0 {
-		slotDuration = 15 * time.Minute
 	}
 
 	// Calculate number of slots for next 24-48 hours
@@ -213,12 +207,9 @@ func (s *MinerScheduler) buildMPCForecast(ctx context.Context, config *Config, p
 			continue
 		}
 
-		// Get solar forecast for this time period
-		// Since solar forecasts are typically hourly, we use the forecast for the containing hour
-		// All 15-minute slots within the same hour will use the same solar/weather forecast
-		hourIndex := int(futureTime.Sub(now).Hours())
-		solar := solarForecasts[hourIndex]
-		weather := weatherData[hourIndex]
+		// Get solar forecast for this time period using the slot index directly
+		solar := solarForecasts[i]
+		weather := weatherData[i]
 
 		// Estimate load forecast (miners only, based on price and solar availability)
 		loadForecast := s.estimateLoadForecast(importPrice*1000.0, config.PriceLimit/1000, solar, config)
@@ -246,8 +237,8 @@ type WeatherData struct {
 	AirTemperature float64 // °C air temperature
 }
 
-// getSolarForecast gets solar power forecast from weather data
-func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, weatherForecast *meteo.METJSONForecast, plantInfo *sigenergy.PlantRunningInfo) (map[int]float64, map[int]WeatherData, error) {
+// getSolarForecast gets solar power forecast from weather data at slotDuration resolution
+func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, slotDuration time.Duration, weatherForecast *meteo.METJSONForecast, plantInfo *sigenergy.PlantRunningInfo) (map[int]float64, map[int]WeatherData, error) {
 	if weatherForecast == nil || weatherForecast.Properties == nil {
 		return nil, nil, fmt.Errorf("invalid weather forecast data")
 	}
@@ -258,12 +249,15 @@ func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, weather
 		currentPVPower = plantInfo.PhotovoltaicPower
 	}
 
-	// Convert weather to solar forecast
+	// Convert weather to solar forecast at slotDuration resolution
+	forecastDuration := 36 * time.Hour
+	numSlots := int(forecastDuration / slotDuration)
+
 	solarForecast := make(map[int]float64)
 	weatherData := make(map[int]WeatherData)
 
-	for i := range 36 {
-		futureTime := now.Add(time.Duration(i) * time.Hour)
+	for i := range numSlots {
+		futureTime := now.Add(time.Duration(i) * slotDuration)
 		solarPower, cloudCoverage, weatherSymbol, airTemp := s.estimateSolarPowerFromWeather(weatherForecast, futureTime, config.MaxSolarPower, currentPVPower)
 		solarForecast[i] = solarPower
 		weatherData[i] = WeatherData{
