@@ -13,12 +13,13 @@ import (
 // Config represents the configuration for the miner scheduler
 type Config struct {
 	// Scheduler settings
-	PriceLimit               float64       `json:"price_limit"`                 // Price limit in EUR/MWh
-	Network                  string        `json:"network"`                     // Network to scan for miners (CIDR notation)
-	CheckPriceInterval       time.Duration `json:"check_price_interval"`        // How often to run the task
-	MinersStateCheckInterval time.Duration `json:"miners_state_check_interval"` // How often to check miners state
-	MinerDiscoveryInterval   time.Duration `json:"miner_discovery_interval"`    // How often to discover miners
-	DryRun                   bool          `json:"dry_run"`                     // Run in dry-run mode (simulate actions without executing)
+	PriceLimit                float64       `json:"price_limit"`                  // Price limit in EUR/MWh
+	Network                   string        `json:"network"`                      // Network to scan for miners (CIDR notation)
+	CheckPriceInterval        time.Duration `json:"check_price_interval"`         // How often to run the task
+	MinersStateCheckInterval  time.Duration `json:"miners_state_check_interval"`  // How often to check miners state
+	MinerDiscoveryInterval    time.Duration `json:"miner_discovery_interval"`     // How often to discover miners
+	MinerMaxConsecutiveErrors int           `json:"miner_max_consecutive_errors"` // Number of consecutive refresh errors before a miner is evicted
+	DryRun                    bool          `json:"dry_run"`                      // Run in dry-run mode (simulate actions without executing)
 
 	// API settings
 	SecurityToken string        `json:"security_token"` // ENTSO-E API token
@@ -95,6 +96,7 @@ func DefaultConfig() *Config {
 		CheckPriceInterval:          15 * time.Minute,
 		MinersStateCheckInterval:    1 * time.Minute,
 		MinerDiscoveryInterval:      10 * time.Minute,
+		MinerMaxConsecutiveErrors:   3,
 		MPCExecutionInterval:        1 * time.Minute,
 		DryRun:                      false,
 		APITimeout:                  30 * time.Second,
@@ -217,6 +219,10 @@ func (c *Config) Validate() error {
 
 	if c.MinerDiscoveryInterval <= 0 {
 		return fmt.Errorf("miner_discovery_interval must be greater than 0, got: %s", c.MinerDiscoveryInterval)
+	}
+
+	if c.MinerMaxConsecutiveErrors <= 0 {
+		return fmt.Errorf("miner_max_consecutive_errors must be greater than 0, got: %d", c.MinerMaxConsecutiveErrors)
 	}
 
 	if c.APITimeout <= 0 {

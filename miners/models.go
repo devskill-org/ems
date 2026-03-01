@@ -65,12 +65,13 @@ type AvalonQCommand struct {
 
 // AvalonQHost represents an Avalon miner host with its connection details and statistics.
 type AvalonQHost struct {
-	Address          string
-	Port             int
-	Version          *AvalonQVersion
-	LiteStatsHistory []*AvalonLiteStats
-	LastStatsError   error
-	LastStats        *AvalonLiteStats
+	Address           string
+	Port              int
+	Version           *AvalonQVersion
+	LiteStatsHistory  []*AvalonLiteStats
+	LastStatsError    error
+	LastStats         *AvalonLiteStats
+	ConsecutiveErrors int // number of consecutive RefreshLiteStats failures
 }
 
 // AddLiteStats appends a new AvalonLiteStats to the history and keeps only the last 5 entries.
@@ -78,8 +79,10 @@ func (h *AvalonQHost) AddLiteStats(stats *AvalonLiteStats, err error) {
 	h.LastStats = stats
 	h.LastStatsError = err
 	if err != nil {
+		h.ConsecutiveErrors++
 		return
 	}
+	h.ConsecutiveErrors = 0
 	h.LiteStatsHistory = append(h.LiteStatsHistory, stats)
 	if len(h.LiteStatsHistory) > 5 {
 		h.LiteStatsHistory = h.LiteStatsHistory[len(h.LiteStatsHistory)-5:]

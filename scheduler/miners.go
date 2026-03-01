@@ -85,7 +85,8 @@ func (s *MinerScheduler) calculateTotalPowerConsumption(minersList []*miners.Ava
 	return totalPower
 }
 
-// refreshMinersState refreshes the state of all discovered miners and returns miners list
+// refreshMinersState refreshes the state of all discovered miners and returns miners list.
+// Miners that exceed the consecutive error threshold are evicted from discoveredMiners.
 func (s *MinerScheduler) refreshMinersState(ctx context.Context) []*miners.AvalonQHost {
 	var wg sync.WaitGroup
 	minersList := s.GetDiscoveredMiners()
@@ -99,7 +100,25 @@ func (s *MinerScheduler) refreshMinersState(ctx context.Context) []*miners.Avalo
 		}(miner)
 	}
 	wg.Wait()
-	return minersList
+
+	// Evict miners that have exceeded the consecutive error threshold
+	maxErrors := s.config.MinerMaxConsecutiveErrors
+	active := minersList[:0]
+	for _, miner := range minersList {
+		if miner.LastStatsError != nil {
+			if miner.ConsecutiveErrors >= maxErrors {
+				key := fmt.Sprintf("%s:%d", miner.Address, miner.Port)
+				s.discoveredMiners.Delete(key)
+				s.logger.Printf("Evicted miner %s:%d after %d consecutive refresh errors (last error: %v)",
+					miner.Address, miner.Port, miner.ConsecutiveErrors, miner.LastStatsError)
+				continue
+			}
+			s.logger.Printf("Miner %s:%d refresh error (%d/%d): %v",
+				miner.Address, miner.Port, miner.ConsecutiveErrors, maxErrors, miner.LastStatsError)
+		}
+		active = append(active, miner)
+	}
+	return active
 }
 
 func (s *MinerScheduler) getEffecivePowerLimit() float64 {

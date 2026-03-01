@@ -1,8 +1,12 @@
 package scheduler
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/devskill-org/ems/miners"
@@ -495,6 +499,118 @@ func TestControlMiner_StandbyState(t *testing.T) {
 			t.Errorf("expected state %v, got %v", miners.AvalonStateStandBy, newState)
 		}
 	})
+}
+
+func TestRefreshMinersState_EvictsAfterConsecutiveErrors(t *testing.T) {
+	cfg := &Config{
+		FanRHighThreshold:         80,
+		FanRLowThreshold:          50,
+		MinerPowerStandby:         0.1,
+		MinerPowerEco:             1.0,
+		MinerPowerStandard:        1.5,
+		MinerPowerSuper:           2.0,
+		MinersPowerLimit:          10.0,
+		MinerMaxConsecutiveErrors: 3,
+	}
+	scheduler := newTestScheduler(cfg)
+
+	// Register a miner that always fails to refresh
+	miner := &miners.AvalonQHost{
+		Address:        "192.168.1.200",
+		Port:           4028,
+		LastStatsError: errors.New("connection refused"),
+	}
+	key := fmt.Sprintf("%s:%d", miner.Address, miner.Port)
+	scheduler.discoveredMiners.Store(key, miner)
+
+	ctx := context.Background()
+
+	// First two calls: miner should still be present (below threshold)
+	for i := 1; i < cfg.MinerMaxConsecutiveErrors; i++ {
+		active := scheduler.refreshMinersState(ctx)
+		if len(active) != 1 {
+			t.Errorf("call %d: expected miner still active, got %d active miners", i, len(active))
+		}
+		if _, exists := scheduler.discoveredMiners.Load(key); !exists {
+			t.Errorf("call %d: miner should still be in discoveredMiners", i)
+		}
+	}
+
+	// Third call: miner reaches the threshold and should be evicted
+	active := scheduler.refreshMinersState(ctx)
+	if len(active) != 0 {
+		t.Errorf("expected miner to be evicted, got %d active miners", len(active))
+	}
+	if _, exists := scheduler.discoveredMiners.Load(key); exists {
+		t.Error("evicted miner should have been removed from discoveredMiners")
+	}
+}
+
+func TestRefreshMinersState_ResetsErrorCountOnSuccess(t *testing.T) {
+	// AddLiteStats (called by RefreshLiteStats) owns the ConsecutiveErrors counter.
+	// Verify that a successful call resets it to zero and a failing call increments it.
+	miner := &miners.AvalonQHost{
+		Address:           "192.168.1.201",
+		Port:              4028,
+		ConsecutiveErrors: 2, // simulate two prior failures
+	}
+
+	// Successful stats call → counter must reset to zero.
+	stats := &miners.AvalonLiteStats{State: miners.AvalonStateMining}
+	miner.AddLiteStats(stats, nil)
+
+	if miner.ConsecutiveErrors != 0 {
+		t.Errorf("expected ConsecutiveErrors to be reset to 0 after success, got %d", miner.ConsecutiveErrors)
+	}
+	if miner.LastStatsError != nil {
+		t.Errorf("expected LastStatsError to be nil after success, got %v", miner.LastStatsError)
+	}
+
+	// Failing stats call → counter must increment.
+	miner.AddLiteStats(nil, errors.New("timeout"))
+	if miner.ConsecutiveErrors != 1 {
+		t.Errorf("expected ConsecutiveErrors to be 1 after first failure, got %d", miner.ConsecutiveErrors)
+	}
+
+	miner.AddLiteStats(nil, errors.New("timeout"))
+	if miner.ConsecutiveErrors != 2 {
+		t.Errorf("expected ConsecutiveErrors to be 2 after second failure, got %d", miner.ConsecutiveErrors)
+	}
+
+	// Another success → counter resets again.
+	miner.AddLiteStats(stats, nil)
+	if miner.ConsecutiveErrors != 0 {
+		t.Errorf("expected ConsecutiveErrors to reset to 0 after recovery, got %d", miner.ConsecutiveErrors)
+	}
+}
+
+func TestValidate_MinerMaxConsecutiveErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   int
+		wantErr bool
+	}{
+		{name: "zero is invalid", value: 0, wantErr: true},
+		{name: "negative is invalid", value: -1, wantErr: true},
+		{name: "one is valid", value: 1, wantErr: false},
+		{name: "default three is valid", value: 3, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.SecurityToken = "test-token" // satisfy unrelated required fields
+			cfg.MinerMaxConsecutiveErrors = tt.value
+			err := cfg.Validate()
+			hasFieldErr := err != nil && strings.Contains(err.Error(), "miner_max_consecutive_errors")
+			if tt.wantErr && !hasFieldErr {
+				t.Errorf("expected miner_max_consecutive_errors validation error for value=%d, got: %v", tt.value, err)
+			}
+			if !tt.wantErr && hasFieldErr {
+				t.Errorf("expected no miner_max_consecutive_errors validation error for value=%d, got: %v", tt.value, err)
+			}
+		})
+	}
 }
 
 func TestControlMiner_PowerCalculation(t *testing.T) {

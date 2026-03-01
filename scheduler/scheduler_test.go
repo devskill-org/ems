@@ -94,19 +94,20 @@ func testConfigWithServer(server *httptest.Server) *Config {
 	}
 
 	return &Config{
-		PriceLimit:               50.0,
-		Network:                  "192.168.1.0/24",
-		CheckPriceInterval:       time.Minute,
-		MinersStateCheckInterval: time.Minute,
-		MinerDiscoveryInterval:   10 * time.Minute,
-		PVPollInterval:           10 * time.Second,
-		PVIntegrationPeriod:      15 * time.Minute,
-		APITimeout:               5 * time.Second,
-		MinerTimeout:             5 * time.Second,
-		MPCExecutionInterval:     time.Minute,
-		Location:                 "Europe/Riga",
-		SecurityToken:            "test-token",
-		URLFormat:                urlFormat,
+		PriceLimit:                50.0,
+		Network:                   "192.168.1.0/24",
+		CheckPriceInterval:        time.Minute,
+		MinersStateCheckInterval:  time.Minute,
+		MinerDiscoveryInterval:    10 * time.Minute,
+		MinerMaxConsecutiveErrors: 3,
+		PVPollInterval:            10 * time.Second,
+		PVIntegrationPeriod:       15 * time.Minute,
+		APITimeout:                5 * time.Second,
+		MinerTimeout:              5 * time.Second,
+		MPCExecutionInterval:      time.Minute,
+		Location:                  "Europe/Riga",
+		SecurityToken:             "test-token",
+		URLFormat:                 urlFormat,
 	}
 }
 
