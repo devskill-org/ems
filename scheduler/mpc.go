@@ -197,8 +197,9 @@ func (s *MinerScheduler) buildMPCForecast(ctx context.Context, config *Config, p
 
 		// Get exact price for this time slot using LookupPriceByTime
 		// This will return the price for the specific 15-minute interval
-		var importPrice, exportPrice float64
-		if spotPrice, found := marketData.LookupPriceByTime(futureTime); found {
+		var spotPrice, importPrice, exportPrice float64
+		var found bool
+		if spotPrice, found = marketData.LookupPriceByTime(futureTime); found {
 			// Apply price adjustments from configuration (all values in EUR/MWh)
 			importPrice = (spotPrice + config.ImportPriceOperatorFee + config.ImportPriceDeliveryFee) / 1000.0 // Convert to EUR/kWh
 			exportPrice = (spotPrice - config.ExportPriceOperatorFee) / 1000.0                                 // Convert to EUR/kWh
@@ -211,8 +212,8 @@ func (s *MinerScheduler) buildMPCForecast(ctx context.Context, config *Config, p
 		solar := solarForecasts[i]
 		weather := weatherData[i]
 
-		// Estimate load forecast (miners only, based on price and solar availability)
-		loadForecast := s.estimateLoadForecast(importPrice*1000.0, config.PriceLimit/1000, solar, config)
+		// Estimate load forecast (miners only, based on spot price and solar availability)
+		loadForecast := s.estimateLoadForecast(spotPrice, config.PriceLimit/1000, solar, config)
 
 		timeSlots = append(timeSlots, mpc.TimeSlot{
 			Hour:           i, // Now represents time slot index, not hour
