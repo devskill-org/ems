@@ -11,7 +11,7 @@ import { useWebSocket } from "./hooks/useWebSocket";
 import { useState, useEffect } from "react";
 
 // Check if we're in demo mode
-const isDemoMode = typeof __DEMO_MODE__ !== 'undefined' && __DEMO_MODE__;
+const isDemoMode = typeof __DEMO_MODE__ !== "undefined" && __DEMO_MODE__;
 
 function App() {
   const { health, status, loading, error, wsConnected } = useWebSocket();
@@ -20,10 +20,10 @@ function App() {
   // Show demo info automatically on first load in demo mode
   useEffect(() => {
     if (isDemoMode) {
-      const hasSeenDemo = localStorage.getItem('ems-demo-info-seen');
+      const hasSeenDemo = localStorage.getItem("ems-demo-info-seen");
       if (!hasSeenDemo) {
         setShowDemoInfo(true);
-        localStorage.setItem('ems-demo-info-seen', 'true');
+        localStorage.setItem("ems-demo-info-seen", "true");
       }
     }
   }, []);
@@ -208,12 +208,18 @@ function App() {
 
             <div
               className="power-display-wrapper"
-              data-mobile-label="Plant Active Power"
+              data-mobile-label="Load Power"
             >
               <PowerDisplay
-                value={health?.ems?.plant_active_power}
-                label="Active Power"
-                invertColors={true}
+                value={
+                  health?.ems !== undefined
+                    ? health.ems.current_pv_power +
+                      health.ems.grid_sensor_active_power -
+                      health.ems.ess_power
+                    : undefined
+                }
+                label="Load Power"
+                invertColors={false}
                 showLabel={true}
                 style={{ position: "absolute", top: "194px", left: "223px" }}
               />

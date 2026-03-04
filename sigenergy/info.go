@@ -63,10 +63,16 @@ func ShowPlantInfo(plantModbusAddress string) error {
 	fmt.Println()
 
 	// Power Generation
+	// Load power = PV power + grid import - ESS charging
+	// GridSensorActivePower: >0 buying from grid, <0 selling to grid
+	// ESSPower: >0 charging, <0 discharging
+	loadPower := info.PhotovoltaicPower + info.GridSensorActivePower - info.ESSPower
+
 	fmt.Println("POWER GENERATION")
 	fmt.Println("--------------------------------------------------")
 	fmt.Printf("  Photovoltaic Power:             %.3f kW\n", info.PhotovoltaicPower)
 	fmt.Printf("  ESS Power:                      %.3f kW %s\n", info.ESSPower, getESSPowerStatus(info.ESSPower))
+	fmt.Printf("  Load Power:                     %.3f kW\n", loadPower)
 	fmt.Println()
 
 	// ESS Information
