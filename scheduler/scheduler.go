@@ -186,8 +186,6 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 
 	if s.config.DryRun {
 		s.logger.Printf("DRY-RUN MODE ENABLED: Actions will be simulated only")
-	} else {
-		s.GetMarketData(ctx) //nolint:gosec
 	}
 
 	// Start web server if configured
@@ -258,6 +256,15 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			},
 		},
 		{
+			name:          "MarketDataRefresh",
+			initialDelay:  0, // Run immediately to warm the cache on startup
+			interval:      time.Minute,
+			retryInterval: &taskRetryInterval,
+			runFunc: func() error {
+				return s.runMarketDataRefresh(ctx)
+			},
+		},
+		{
 			name:          "MPC",
 			initialDelay:  minersControlInitialDelay,
 			interval:      config.CheckPriceInterval,
@@ -279,7 +286,7 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			initialDelay: 0,
 			interval:     config.PVPollInterval,
 			runFunc: func() error {
-				return s.runDataPoll(dataSamples)
+				return s.runDataPoll(ctx, dataSamples)
 			},
 		},
 		{
@@ -296,7 +303,7 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			initialDelay: mpcExecutionInitialDelay,
 			interval:     config.MPCExecutionInterval,
 			runFunc: func() error {
-				return s.runMPCExecution()
+				return s.runMPCExecution(ctx)
 			},
 		},
 	}

@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"database/sql"
 	"sync"
 	"time"
@@ -173,11 +174,11 @@ func (d *DataSamples) GetLatestPower() float64 {
 	return d.samples[len(d.samples)-1].pvPower
 }
 
-func (s *MinerScheduler) runDataPoll(samples *DataSamples) error {
+func (s *MinerScheduler) runDataPoll(ctx context.Context, samples *DataSamples) error {
 	if s.config.PlantModbusAddress == "" {
 		return nil
 	}
-	client, err := sigenergy.NewTCPClient(s.config.PlantModbusAddress, sigenergy.PlantAddress)
+	client, err := sigenergy.NewTCPClient(ctx, s.config.PlantModbusAddress, sigenergy.PlantAddress)
 	if err != nil {
 		s.logger.Printf("Data integration: failed to create modbus client: %v", err)
 		return err
@@ -397,12 +398,12 @@ func (s *MinerScheduler) fetchWeatherSymbol() (*string, error) {
 
 // GetPlantRunningInfo returns the current plant running information
 // If PlantModbusAddress is not configured, returns nil
-func (s *MinerScheduler) GetPlantRunningInfo() *sigenergy.PlantRunningInfo {
+func (s *MinerScheduler) GetPlantRunningInfo(ctx context.Context) *sigenergy.PlantRunningInfo {
 	if s.config.PlantModbusAddress == "" {
 		return nil
 	}
 
-	client, err := sigenergy.NewTCPClient(s.config.PlantModbusAddress, sigenergy.PlantAddress)
+	client, err := sigenergy.NewTCPClient(ctx, s.config.PlantModbusAddress, sigenergy.PlantAddress)
 	if err != nil {
 		s.logger.Printf("Failed to create modbus client for plant info: %v", err)
 		return nil

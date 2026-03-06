@@ -45,7 +45,8 @@ type DownloadOptions struct {
 }
 
 // DownloadPublicationMarketData downloads and decodes publication market data for the current and next day if needed.
-func DownloadPublicationMarketData(ctx context.Context, securityToken string, urlFormat string, location *time.Location) (*PublicationMarketData, error) {
+// fetchNextDay indicates whether to also download data for the next day (e.g. when it is past 13:30).
+func DownloadPublicationMarketData(ctx context.Context, securityToken string, urlFormat string, location *time.Location, fetchNextDay bool) (*PublicationMarketData, error) {
 
 	now := time.Now().In(location)
 	url := buildPublicationMarketDataURL(securityToken, urlFormat, now)
@@ -59,8 +60,8 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 		return nil, err
 	}
 
-	// If current time is >= 14:00, also download data for the next day
-	if now.Hour() >= 14 {
+	// If instructed, also download data for the next day
+	if fetchNextDay {
 		tomorrow := now.AddDate(0, 0, 1)
 		urlNextDay := buildPublicationMarketDataURL(securityToken, urlFormat, tomorrow)
 

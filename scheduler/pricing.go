@@ -42,20 +42,36 @@ func (s *MinerScheduler) GetMarketData(ctx context.Context) (*entsoe.Publication
 		s.logger.Printf("No cached pricing data available, downloading new PublicationMarketData...")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Calculate next expiry time at 13:30 — 30 minutes before the 14:00 ENTSO-E
+	// publish time so the MarketDataRefresh task has a window to pre-download the
+	// next day's prices before PriceCheck and MPC need them.
+	nextExpiry := time.Date(now.Year(), now.Month(), now.Day(), 13, 30, 0, 0, location)
 
-	newDoc, err := entsoe.DownloadPublicationMarketData(ctx, s.config.SecurityToken, s.config.URLFormat, location)
+	// Fetch next-day data when the current time is at or past today's 13:30.
+	fetchNextDay := !now.Before(nextExpiry)
+
+	// If it's already past 13:30 today, set expiry to 13:30 tomorrow
+	if fetchNextDay {
+		nextExpiry = nextExpiry.Add(24 * time.Hour)
+	}
+
+	// Perform the network download WITHOUT holding the lock so other goroutines
+	// (GetConfig, runStateCheck, etc.) are never blocked during I/O.
+	newDoc, err := entsoe.DownloadPublicationMarketData(ctx, s.config.SecurityToken, s.config.URLFormat, location, fetchNextDay)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download PublicationMarketData: %w", err)
 	}
 
-	// Calculate next expiry time at 14:00
-	nextExpiry := time.Date(now.Year(), now.Month(), now.Day(), 14, 0, 0, 0, location)
+	// Re-acquire the write lock only to store the result.
+	// Double-check: another goroutine may have already refreshed while we were
+	// downloading; keep whichever copy is fresher.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// If it's already past 14:00 today, set expiry to 14:00 tomorrow
-	if now.Hour() >= 14 {
-		nextExpiry = nextExpiry.Add(24 * time.Hour)
+	if s.pricesMarketData != nil && now.Before(s.pricesMarketDataExpiry) {
+		// Another goroutine beat us to it — return the already-cached copy.
+		s.logger.Printf("PublicationMarketData was refreshed concurrently, using existing cache")
+		return s.pricesMarketData, nil
 	}
 
 	// Store as latest with expiry time
@@ -64,6 +80,46 @@ func (s *MinerScheduler) GetMarketData(ctx context.Context) (*entsoe.Publication
 
 	s.logger.Printf("Successfully downloaded new PublicationMarketData, cache expires at %s", nextExpiry.Format(time.RFC3339))
 	return newDoc, nil
+}
+
+// runMarketDataRefresh proactively refreshes the market data cache if it has
+// expired. It is meant to be run as a frequent periodic task (every minute)
+// so that PriceCheck and MPC always find a warm cache and never have to block
+// on a download themselves.
+//
+// The cache expiry is set to 13:30, giving this task a 30-minute window to
+// successfully pre-fetch the next day's ENTSO-E prices before the 14:00
+// PriceCheck and MPC tasks need them.
+func (s *MinerScheduler) runMarketDataRefresh(ctx context.Context) error {
+	location, err := time.LoadLocation(s.config.Location)
+	if err != nil {
+		return fmt.Errorf("failed to load location: %w", err)
+	}
+
+	now := time.Now().In(location)
+
+	s.mu.RLock()
+	marketData := s.pricesMarketData
+	expiry := s.pricesMarketDataExpiry
+	s.mu.RUnlock()
+
+	// Cache is still warm — nothing to do.
+	if marketData != nil && now.Before(expiry) {
+		return nil
+	}
+
+	if marketData != nil {
+		s.logger.Printf("[MarketDataRefresh] Cache expired at %s, pre-fetching new data...", expiry.Format(time.RFC3339))
+	} else {
+		s.logger.Printf("[MarketDataRefresh] No cached market data, fetching...")
+	}
+
+	if _, err = s.GetMarketData(ctx); err != nil {
+		return fmt.Errorf("failed to refresh market data: %w", err)
+	}
+
+	s.logger.Printf("[MarketDataRefresh] Market data cache refreshed successfully")
+	return nil
 }
 
 // runPriceCheck executes the main scheduler task

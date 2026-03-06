@@ -121,8 +121,8 @@ func (s *MinerScheduler) refreshMinersState(ctx context.Context) []*miners.Avalo
 	return active
 }
 
-func (s *MinerScheduler) getEffecivePowerLimit() float64 {
-	info := s.GetPlantRunningInfo()
+func (s *MinerScheduler) getEffecivePowerLimit(ctx context.Context) float64 {
+	info := s.GetPlantRunningInfo(ctx)
 	availablePower := 0.0
 	if info != nil {
 		availablePower = info.PhotovoltaicPower // in kW
@@ -159,7 +159,7 @@ func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64)
 	var totalPower float64
 
 	if usePowerControl {
-		effectiveLimit = s.getEffecivePowerLimit()
+		effectiveLimit = s.getEffecivePowerLimit(ctx)
 		totalPower = s.calculateTotalPowerConsumption(minersList)
 		s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
 	}
@@ -336,7 +336,7 @@ func (s *MinerScheduler) runStateCheck(ctx context.Context) error {
 	var totalPower float64
 
 	if usePowerControl {
-		effectiveLimit = s.getEffecivePowerLimit()
+		effectiveLimit = s.getEffecivePowerLimit(ctx)
 		totalPower = s.calculateTotalPowerConsumption(minersList)
 		s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
 	}
