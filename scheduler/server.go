@@ -441,7 +441,9 @@ func (hs *WebServer) broadcastStatus() {
 			})
 
 			if hasClients {
-				data := hs.buildStatusData()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				data := hs.buildStatusData(ctx)
+				cancel()
 				message, err := json.Marshal(data)
 				if err != nil {
 					fmt.Printf("Failed to marshal status data: %v\n", err)
@@ -457,14 +459,16 @@ func (hs *WebServer) broadcastStatus() {
 
 // sendStatusToClient sends status data to a specific client
 func (hs *WebServer) sendStatusToClient(conn *websocket.Conn) {
-	data := hs.buildStatusData()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	data := hs.buildStatusData(ctx)
 	if err := conn.WriteJSON(data); err != nil {
 		fmt.Printf("Failed to send initial data: %v\n", err)
 	}
 }
 
 // buildStatusData builds combined health and status data
-func (hs *WebServer) buildStatusData() map[string]any {
+func (hs *WebServer) buildStatusData(ctx context.Context) map[string]any {
 	status := hs.scheduler.GetStatus()
 	miners := hs.scheduler.GetDiscoveredMiners()
 	doc := hs.scheduler.GetPricesMarketData()
@@ -542,7 +546,7 @@ func (hs *WebServer) buildStatusData() map[string]any {
 		},
 	}
 
-	info := hs.scheduler.GetPlantRunningInfo()
+	info := hs.scheduler.GetPlantRunningInfo(ctx)
 	if info != nil {
 		health.EMS = EMSHealth{
 			CurrentPVPower:        info.PhotovoltaicPower,

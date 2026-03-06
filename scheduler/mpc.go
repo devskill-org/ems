@@ -25,7 +25,7 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 	}
 
 	// Step 1: Read plant running info from inverter
-	plantInfo, err := s.readPlantRunningInfo(config)
+	plantInfo, err := s.readPlantRunningInfo(ctx, config)
 	if err != nil {
 		s.logger.Printf("Error reading plant running info from inverter: %v", err)
 		return err
@@ -107,7 +107,7 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 		len(decisions), forecastDuration.Hours(), totalProfit)
 
 	// Step 6: Execute the first control decision
-	err = s.executeMPCDecision(&decisions[0], config.DryRun)
+	err = s.executeMPCDecision(ctx, &decisions[0], config.DryRun)
 
 	// Record execution status
 	s.mu.Lock()
@@ -130,9 +130,9 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 }
 
 // readPlantRunningInfo reads the plant running information from the inverter
-func (s *MinerScheduler) readPlantRunningInfo(config *Config) (*sigenergy.PlantRunningInfo, error) {
+func (s *MinerScheduler) readPlantRunningInfo(ctx context.Context, config *Config) (*sigenergy.PlantRunningInfo, error) {
 	// Connect to Plant Modbus server
-	client, err := sigenergy.NewTCPClient(config.PlantModbusAddress, sigenergy.PlantAddress)
+	client, err := sigenergy.NewTCPClient(ctx, config.PlantModbusAddress, sigenergy.PlantAddress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Plant Modbus: %w", err)
 	}
@@ -454,7 +454,7 @@ func (s *MinerScheduler) estimateLoadForecast(hourlyPrice float64, priceLimit fl
 }
 
 // executeMPCDecision executes the first MPC control decision
-func (s *MinerScheduler) executeMPCDecision(decision *mpc.ControlDecision, dryRun bool) error {
+func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.ControlDecision, dryRun bool) error {
 	if dryRun {
 		s.logger.Printf("DRY-RUN: Would execute MPC decision - ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW, Discharge: %.1f kW, Import: %.1f kW, Export: %.1f kW",
 			decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, decision.BatteryDischarge, decision.GridImport, decision.GridExport)
@@ -464,7 +464,7 @@ func (s *MinerScheduler) executeMPCDecision(decision *mpc.ControlDecision, dryRu
 	config := s.GetConfig()
 
 	// Connect to Plant Modbus server
-	client, err := sigenergy.NewTCPClient(config.PlantModbusAddress, sigenergy.PlantAddress)
+	client, err := sigenergy.NewTCPClient(ctx, config.PlantModbusAddress, sigenergy.PlantAddress)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Plant Modbus: %w", err)
 	}
@@ -555,7 +555,7 @@ func (s *MinerScheduler) executeMPCDecision(decision *mpc.ControlDecision, dryRu
 
 // runMPCExecution re-executes the current MPC decision only if previous execution failed
 // This ensures the decision is applied even if previous execution failed
-func (s *MinerScheduler) runMPCExecution() error {
+func (s *MinerScheduler) runMPCExecution(ctx context.Context) error {
 
 	s.mu.RLock()
 	config := s.GetConfig()
@@ -599,7 +599,7 @@ func (s *MinerScheduler) runMPCExecution() error {
 	s.logger.Printf("Executing MPC decision for timestamp %d (hour %d)", currentDecision.Timestamp, currentDecision.Hour)
 
 	// Execute the current decision
-	err := s.executeMPCDecision(currentDecision, config.DryRun)
+	err := s.executeMPCDecision(ctx, currentDecision, config.DryRun)
 
 	s.mu.Lock()
 	if err != nil {

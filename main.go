@@ -38,7 +38,15 @@ func main() {
 	}
 
 	if *info {
-		if err := sigenergy.ShowPlantInfo(config.PlantModbusAddress); err != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigChan
+			cancel()
+		}()
+		if err := sigenergy.ShowPlantInfo(ctx, config.PlantModbusAddress); err != nil {
 			fmt.Println("Error:", err)
 			return
 		}

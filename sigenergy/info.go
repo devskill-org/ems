@@ -2,18 +2,19 @@
 package sigenergy
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
 
 // ShowPlantInfo displays detailed information about the plant in a formatted table
-func ShowPlantInfo(plantModbusAddress string) error {
+func ShowPlantInfo(ctx context.Context, plantModbusAddress string) error {
 	if plantModbusAddress == "" {
 		return fmt.Errorf("PlantModbusAddress is not configured")
 	}
 
 	// Create TCP modbus client (PlantModbusAddress already includes port)
-	client, err := NewTCPClient(plantModbusAddress, PlantAddress)
+	client, err := NewTCPClient(ctx, plantModbusAddress, PlantAddress)
 	if err != nil {
 		return fmt.Errorf("error connecting to plant modbus server at %s: %w", plantModbusAddress, err)
 	}
