@@ -147,7 +147,14 @@ function App() {
             <div className="miners-list">
               {status.miners.list.map((miner, index) => (
                 <div key={index} className="miner-item">
-                  <div className="miner-ip">{miner.ip}</div>
+                  <div
+                    className="miner-ip miner-ip-link"
+                    onClick={() => window.open(`http://${miner.ip}`, "_blank", "noopener,noreferrer")}
+                    title={`Open http://${miner.ip}`}
+                    style={{ cursor: "pointer" }}
+                  >
+                    {miner.ip}
+                  </div>
                   <div
                     className={`miner-status status-${miner.status?.toLowerCase()}`}
                   >
