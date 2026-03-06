@@ -557,12 +557,19 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 // This ensures the decision is applied even if previous execution failed
 func (s *MinerScheduler) runMPCExecution(ctx context.Context) error {
 
+	// Snapshot all shared state under a single, short-lived RLock.
+	// Crucially we read s.config directly instead of calling GetConfig(), which
+	// would attempt to re-acquire s.mu.RLock() on a non-reentrant mutex and
+	// deadlock whenever a concurrent writer (RunMPCOptimize) is waiting for
+	// s.mu.Lock().
 	s.mu.RLock()
-	config := s.GetConfig()
+	config := s.config
+	decisions := s.mpcDecisions
+	lastExecuted := s.lastExecutedDecision
+	s.mu.RUnlock()
 
 	// Check if Plant Modbus Address is configured and there are decisions
-	if config.PlantModbusAddress == "" || len(s.mpcDecisions) == 0 {
-		s.mu.RUnlock()
+	if config.PlantModbusAddress == "" || len(decisions) == 0 {
 		return nil
 	}
 
@@ -570,8 +577,8 @@ func (s *MinerScheduler) runMPCExecution(ctx context.Context) error {
 	var currentDecision *mpc.ControlDecision
 
 	// Find the decision that matches the current hour
-	for i := range s.mpcDecisions {
-		decision := &s.mpcDecisions[i]
+	for i := range decisions {
+		decision := &decisions[i]
 		// Check if current time falls within this decision's hour
 		// Each decision covers a check price interval window starting from its timestamp
 		if now >= decision.Timestamp && now < decision.Timestamp+int64(config.CheckPriceInterval.Seconds()) {
@@ -582,13 +589,9 @@ func (s *MinerScheduler) runMPCExecution(ctx context.Context) error {
 
 	if currentDecision == nil {
 		// No matching decision found for current timestamp
-		s.mu.RUnlock()
 		s.logger.Printf("No matching decision found for the current timestamp")
 		return nil
 	}
-
-	lastExecuted := s.lastExecutedDecision
-	s.mu.RUnlock()
 
 	// Check if this decision has already been executed
 	if lastExecuted != nil && currentDecision.Timestamp == lastExecuted.Timestamp {
