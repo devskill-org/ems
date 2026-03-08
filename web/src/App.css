@@ -193,6 +193,7 @@ body {
 }
 
 .miner-item {
+    position: relative;
     background-color: rgba(51, 65, 85, 0.5);
     padding: 1rem;
     border-radius: 6px;
@@ -235,6 +236,7 @@ body {
 .miner-status {
     display: inline-block;
     padding: 0.25rem 0.75rem;
+    margin-left: -0.75rem;
     border-radius: 4px;
     font-size: 0.75rem;
     font-weight: 600;
@@ -254,6 +256,87 @@ body {
 .miner-status.status-unknown {
     background-color: rgba(148, 163, 184, 0.2);
     color: var(--color-text-secondary);
+}
+
+.miner-badges {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.3rem;
+}
+
+.miner-filter-usage {
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.filter-usage-low {
+    background-color: rgba(22, 163, 74, 0.15);
+    color: var(--color-success);
+    border: 1px solid rgba(22, 163, 74, 0.4);
+}
+
+.filter-usage-high {
+    background-color: rgba(234, 88, 12, 0.15);
+    color: var(--color-warning);
+    border: 1px solid rgba(234, 88, 12, 0.4);
+}
+
+.refresh-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--border-radius);
+    font-size: 0.8rem;
+    font-weight: 600;
+    background-color: rgba(37, 99, 235, 0.15);
+    color: var(--color-primary);
+    border: 1px solid var(--color-primary);
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.15s;
+    vertical-align: middle;
+}
+
+.refresh-button:hover:not(:disabled) {
+    background-color: rgba(37, 99, 235, 0.3);
+    transform: scale(1.04);
+}
+
+.refresh-button:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+.refresh-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.discovery-message {
+    display: inline-block;
+    margin-left: 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--color-success);
+    vertical-align: middle;
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.no-miners {
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+    font-style: italic;
+    padding: 0.75rem 0;
 }
 
 .devices-section {

@@ -64,6 +64,9 @@ export interface StatusResponse {
     list: Array<{
       ip: string;
       status: string;
+      dna?: string;
+      fan_r?: number;
+      filter_usage?: number;
     }>;
   };
   price_data: {
