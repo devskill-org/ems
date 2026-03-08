@@ -141,6 +141,7 @@ func NewWebServer(scheduler *MinerScheduler, port int) *WebServer {
 	mux.HandleFunc("/api/ready", hs.readinessHandler)
 	mux.HandleFunc("/api/ws", hs.wsHandler)
 	mux.HandleFunc("/api/metrics/summary", hs.metricsSummaryHandler)
+	mux.HandleFunc("/api/miners/discover", hs.minersDiscoverHandler)
 
 	// Serve static files from web folder
 	fs := http.FileServer(http.Dir("./web/dist"))
@@ -278,6 +279,28 @@ func (hs *WebServer) readinessHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(ready); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
+}
+
+// minersDiscoverHandler handles the POST /api/miners/discover endpoint
+// It triggers an immediate miner discovery run in the background.
+func (hs *WebServer) minersDiscoverHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := hs.scheduler.RunMinerDiscovery(ctx); err != nil {
+			fmt.Printf("On-demand miner discovery error: %v\n", err)
+		}
+		hs.scheduler.refreshMinersState(ctx)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "discovery started"})
 }
 
 // metricsSummaryHandler handles the /api/metrics/summary endpoint
@@ -489,10 +512,22 @@ func (hs *WebServer) buildStatusData(ctx context.Context) map[string]any {
 			minersHealthy = false
 		}
 
-		minersList = append(minersList, map[string]any{
+		minerEntry := map[string]any{
 			"ip":     miner.Address,
 			"status": minerStatus,
-		})
+		}
+		if miner.LastStats != nil {
+			minerEntry["dna"] = miner.LastStats.DNA
+			minerEntry["fan_r"] = miner.LastStats.FanR
+			// Filter is a cumulative odometer (seconds) counting total air-filter
+			// runtime since manufacture/last reset. 120 000 s (~33 h) is the
+			// Avalon-recommended cleaning interval, so we express usage as a
+			// percentage of that lifetime threshold.
+			const filterLifetimeSeconds = 120_000
+			filterUsage := int(math.Round(float64(miner.LastStats.Filter) / filterLifetimeSeconds * 100))
+			minerEntry["filter_usage"] = filterUsage
+		}
+		minersList = append(minersList, minerEntry)
 	}
 
 	// Determine overall health status

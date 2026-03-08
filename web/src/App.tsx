@@ -8,14 +8,32 @@ import { MPCDecisions } from "./components/MPCDecisions";
 import { MetricsSummary } from "./components/MetricsSummary";
 import { DemoInfo } from "./components/DemoInfo";
 import { useWebSocket } from "./hooks/useWebSocket";
-import { useState, useEffect } from "react";
+import { useConfig } from "./hooks/useConfig";
+import { useState, useEffect, useCallback } from "react";
 
 // Check if we're in demo mode
 const isDemoMode = typeof __DEMO_MODE__ !== "undefined" && __DEMO_MODE__;
 
 function App() {
-  const { health, status, loading, error, wsConnected } = useWebSocket();
+  const { health, status, loading, error, wsConnected, triggerDiscovery } = useWebSocket();
+  const config = useConfig();
   const [showDemoInfo, setShowDemoInfo] = useState(false);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryMessage, setDiscoveryMessage] = useState<string | null>(null);
+
+  const handleDiscovery = useCallback(async () => {
+    setDiscoveryLoading(true);
+    setDiscoveryMessage(null);
+    try {
+      await triggerDiscovery();
+      setDiscoveryMessage("Discovery started");
+    } catch {
+      setDiscoveryMessage("Failed to trigger discovery");
+    } finally {
+      setDiscoveryLoading(false);
+      setTimeout(() => setDiscoveryMessage(null), 4000);
+    }
+  }, [triggerDiscovery]);
 
   // Show demo info automatically on first load in demo mode
   useEffect(() => {
@@ -141,19 +159,67 @@ function App() {
           </section>
         )}
 
-        {status?.miners.list && status.miners.list.length > 0 && (
-          <section className="card">
-            <h2>Discovered Miners</h2>
+        <section className="card">
+          <h2>
+            Discovered Miners
+            <button
+              className="refresh-button"
+              onClick={handleDiscovery}
+              disabled={discoveryLoading}
+              title="Trigger miners discovery"
+              style={{ marginLeft: "12px" }}
+            >
+              {discoveryLoading ? "⏳ Discovering…" : "🔍 Refresh"}
+            </button>
+            {discoveryMessage && (
+              <span className="discovery-message">{discoveryMessage}</span>
+            )}
+          </h2>
+          {status?.miners.list && status.miners.list.length > 0 ? (
             <div className="miners-list">
               {status.miners.list.map((miner, index) => (
-                <div key={index} className="miner-item">
+                <div key={miner.dna ?? index} className="miner-item">
+                  {(miner.filter_usage !== undefined || miner.fan_r !== undefined) && (
+                    <div className="miner-badges">
+                      {miner.filter_usage !== undefined && (
+                        <div
+                          className={`miner-filter-usage ${
+                            miner.filter_usage >= 75
+                              ? "filter-usage-high"
+                              : "filter-usage-low"
+                          }`}
+                          title="Filter usage: cumulative filter runtime as % of 120 000 s cleaning interval"
+                        >
+                          Filter: {miner.filter_usage}%
+                        </div>
+                      )}
+                      {miner.fan_r !== undefined && (
+                        <div
+                          className={`miner-filter-usage ${
+                            miner.fan_r >= 75
+                              ? "filter-usage-high"
+                              : "filter-usage-low"
+                          }`}
+                          title="Fan speed percentage"
+                        >
+                          FanR: {miner.fan_r}%
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div
                     className="miner-ip miner-ip-link"
-                    onClick={() => window.open(`http://${miner.ip}`, "_blank", "noopener,noreferrer")}
+                    onClick={() =>
+                      window.open(
+                        `http://${miner.ip}`,
+                        "_blank",
+                        "noopener,noreferrer"
+                      )
+                    }
                     title={`Open http://${miner.ip}`}
                     style={{ cursor: "pointer" }}
                   >
-                    {miner.ip}
+                    {(miner.dna && config.miner_names[miner.dna]) ?? miner.dna ?? miner.ip}
                   </div>
                   <div
                     className={`miner-status status-${miner.status?.toLowerCase()}`}
@@ -163,8 +229,10 @@ function App() {
                 </div>
               ))}
             </div>
-          </section>
-        )}
+          ) : (
+            <p className="no-miners">No miners discovered yet.</p>
+          )}
+        </section>
 
         <section className="card devices-section">
           <h2>Devices</h2>

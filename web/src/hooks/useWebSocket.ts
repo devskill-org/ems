@@ -8,6 +8,7 @@ interface UseWebSocketReturn {
   loading: boolean;
   error: string | null;
   wsConnected: boolean;
+  triggerDiscovery: () => Promise<void>;
 }
 
 // Check if we're in demo mode
@@ -23,6 +24,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [, setDiscoveryPending] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
@@ -157,11 +159,34 @@ export function useWebSocket(): UseWebSocketReturn {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const triggerDiscovery = useCallback(async () => {
+    if (isDemoMode) {
+      console.log("Demo mode: Simulating miner discovery trigger");
+      setDiscoveryPending(true);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      setDiscoveryPending(false);
+      return;
+    }
+
+    setDiscoveryPending(true);
+    try {
+      const response = await fetch("/api/miners/discover", { method: "POST" });
+      if (!response.ok) {
+        console.error("Failed to trigger miner discovery:", response.statusText);
+      }
+    } catch (err) {
+      console.error("Error triggering miner discovery:", err);
+    } finally {
+      setDiscoveryPending(false);
+    }
+  }, []);
+
   return {
     health,
     status,
     loading,
     error,
     wsConnected,
+    triggerDiscovery,
   };
 }
