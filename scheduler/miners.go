@@ -378,6 +378,12 @@ func (s *MinerScheduler) runStateCheck(ctx context.Context) error {
 
 			powerMu.Lock()
 			newState, newMode := s.controlMiner(m, totalPower, effectiveLimit)
+			if newState != currentState || newMode != currentWorkMode {
+				// Update totalPower optimistically before releasing the lock so that
+				// other concurrent goroutines see the adjusted budget immediately.
+				totalPower += s.getMinerPowerConsumption(newState, newMode) - s.getMinerPowerConsumption(currentState, currentWorkMode)
+				s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
+			}
 			powerMu.Unlock()
 			if newState == currentState && newMode == currentWorkMode {
 				return
@@ -402,15 +408,14 @@ func (s *MinerScheduler) runStateCheck(ctx context.Context) error {
 				s.logger.Printf("Control miner %s:%d to set %s state and %d mode (FanR %d%%)",
 					m.Address, m.Port, newState.String(), newMode, fanR)
 				if err != nil {
+					// Roll back the optimistic power update on failure
+					powerMu.Lock()
+					totalPower -= s.getMinerPowerConsumption(newState, newMode) - s.getMinerPowerConsumption(currentState, currentWorkMode)
+					powerMu.Unlock()
 					errChan <- fmt.Errorf("failed to control miner %s:%d: %w", m.Address, m.Port, err)
 					return
 				}
-				powerMu.Lock()
-				totalPower += s.getMinerPowerConsumption(newState, newMode) - s.getMinerPowerConsumption(currentState, currentWorkMode)
-				s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
-				powerMu.Unlock()
 				s.logger.Printf("Control response for miner %s:%d: %s", m.Address, m.Port, response)
-
 			}
 		}(miner)
 	}
