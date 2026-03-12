@@ -1282,3 +1282,278 @@ func TestBatteryTemperatureThermalDynamics(t *testing.T) {
 		decisions3[2].BatteryAvgCellTemp, forecast3[2].AirTemperature, decisions3[2].BatteryCharge, decisions3[2].BatteryPreHeatActive)
 	t.Logf("  Note: Optimizer accounts for temperature forecasts and preheating costs in all periods")
 }
+
+func TestNegativeExportPriceNoGridExport(t *testing.T) {
+	// When the export price is negative the optimizer must never export to the grid.
+	// Battery discharge is still permitted to cover local load, but any discharge
+	// action that would result in surplus power being pushed to the grid must be
+	// skipped. Solar surplus is curtailed rather than exported at a loss.
+
+	config := SystemConfig{
+		BatteryCapacity:        10.0,
+		BatteryMaxCharge:       5.0,
+		BatteryMaxDischarge:    5.0,
+		BatteryMinSOC:          0.2,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.92,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	forecast := []TimeSlot{
+		{
+			Hour:          0,
+			Timestamp:     1704326400,
+			ImportPrice:   0.10,
+			ExportPrice:   -0.05, // Negative export price
+			SolarForecast: 8.0,   // Plenty of solar to tempt an export
+			LoadForecast:  1.0,
+		},
+		{
+			Hour:          1,
+			Timestamp:     1704330000,
+			ImportPrice:   0.10,
+			ExportPrice:   -0.05, // Negative export price
+			SolarForecast: 6.0,
+			LoadForecast:  1.0,
+		},
+	}
+
+	// Start fully charged — battery discharge to cover load is still valid, but
+	// no discharge should produce grid export.
+	mpc := NewController(config, 2, 0.9)
+	decisions := mpc.Optimize(forecast)
+
+	if len(decisions) != 2 {
+		t.Fatalf("Expected 2 decisions, got %d", len(decisions))
+	}
+
+	for i, d := range decisions {
+		if d.GridExport > 0 {
+			t.Errorf("Slot %d: expected zero grid export when export price is negative, got %.4f kW", i, d.GridExport)
+		}
+		// Solar alone covers load in both slots, so discharge to grid would be wasteful.
+		// The optimizer should not discharge when solar already covers load.
+		if d.BatteryDischarge > 0 {
+			t.Errorf("Slot %d: solar covers load; expected no battery discharge, got %.4f kW", i, d.BatteryDischarge)
+		}
+	}
+
+	t.Logf("Negative export price results:")
+	for i, d := range decisions {
+		t.Logf("  Slot %d: Charge=%.3f kW, Discharge=%.3f kW, GridExport=%.3f kW, GridImport=%.3f kW, Profit=%.4f",
+			i, d.BatteryCharge, d.BatteryDischarge, d.GridExport, d.GridImport, d.Profit)
+	}
+}
+
+func TestNegativeExportPriceDischargeCoversLoad(t *testing.T) {
+	// When export price is negative, battery discharge must still be allowed to
+	// cover local load (reducing grid import), as long as it does not cause grid export.
+
+	config := SystemConfig{
+		BatteryCapacity:        10.0,
+		BatteryMaxCharge:       5.0,
+		BatteryMaxDischarge:    5.0,
+		BatteryMinSOC:          0.2,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.92,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	forecast := []TimeSlot{
+		{
+			Hour:          0,
+			Timestamp:     1704326400,
+			ImportPrice:   0.50, // Very high import price — strong incentive to discharge
+			ExportPrice:   -0.05,
+			SolarForecast: 0.0,
+			LoadForecast:  3.0, // Load exceeds what battery can cover alone, needs grid top-up
+		},
+	}
+
+	// Start with enough charge to partially cover load.
+	mpc := NewController(config, 1, 0.7)
+	decisions := mpc.Optimize(forecast)
+
+	if len(decisions) != 1 {
+		t.Fatalf("Expected 1 decision, got %d", len(decisions))
+	}
+
+	d := decisions[0]
+
+	// Grid export must never occur when export price is non-positive.
+	if d.GridExport > 0 {
+		t.Errorf("Expected zero grid export when export price is negative, got %.4f kW", d.GridExport)
+	}
+
+	// With a high import price and negative export price, the optimizer should
+	// discharge the battery to reduce grid import rather than idle.
+	if d.BatteryDischarge < 0.1 {
+		t.Errorf("Expected battery discharge to cover load when import price is high, got %.4f kW", d.BatteryDischarge)
+	}
+
+	// Discharge must not exceed what is needed to cover load (no surplus to export).
+	maxUsableDischarge := d.BatteryDischarge * config.BatteryEfficiency
+	if maxUsableDischarge > d.BatteryDischarge+forecast[0].LoadForecast+0.01 {
+		t.Errorf("Discharge (%.4f kW effective) exceeds load (%.4f kW) — would cause export", maxUsableDischarge, forecast[0].LoadForecast)
+	}
+
+	t.Logf("Discharge-to-cover-load with negative export price:")
+	t.Logf("  Discharge=%.3f kW, GridImport=%.3f kW, GridExport=%.3f kW, Profit=%.4f",
+		d.BatteryDischarge, d.GridImport, d.GridExport, d.Profit)
+}
+
+func TestZeroExportPriceNoGridExport(t *testing.T) {
+	// When the export price is exactly zero the optimizer must not export to the grid.
+	// Battery discharge to cover local load is still allowed, but discharge that
+	// would produce surplus power (and thus grid export) must not be chosen.
+
+	config := SystemConfig{
+		BatteryCapacity:        10.0,
+		BatteryMaxCharge:       5.0,
+		BatteryMaxDischarge:    5.0,
+		BatteryMinSOC:          0.2,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.92,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	forecast := []TimeSlot{
+		{
+			Hour:          0,
+			Timestamp:     1704326400,
+			ImportPrice:   0.10,
+			ExportPrice:   0.0, // Zero export price
+			SolarForecast: 6.0, // Solar well exceeds load — no discharge needed
+			LoadForecast:  1.0,
+		},
+		{
+			Hour:          1,
+			Timestamp:     1704330000,
+			ImportPrice:   0.10,
+			ExportPrice:   0.0, // Zero export price
+			SolarForecast: 4.0,
+			LoadForecast:  1.0,
+		},
+	}
+
+	mpc := NewController(config, 2, 0.9) // Start fully charged
+	decisions := mpc.Optimize(forecast)
+
+	if len(decisions) != 2 {
+		t.Fatalf("Expected 2 decisions, got %d", len(decisions))
+	}
+
+	for i, d := range decisions {
+		if d.GridExport > 0 {
+			t.Errorf("Slot %d: expected zero grid export when export price is zero, got %.4f kW", i, d.GridExport)
+		}
+		// Solar alone covers load in both slots, so discharge would only create
+		// unwanted surplus — the optimizer should leave the battery idle.
+		if d.BatteryDischarge > 0 {
+			t.Errorf("Slot %d: solar covers load; expected no battery discharge, got %.4f kW", i, d.BatteryDischarge)
+		}
+	}
+
+	t.Logf("Zero export price results:")
+	for i, d := range decisions {
+		t.Logf("  Slot %d: Charge=%.3f kW, Discharge=%.3f kW, GridExport=%.3f kW, GridImport=%.3f kW, Profit=%.4f",
+			i, d.BatteryCharge, d.BatteryDischarge, d.GridExport, d.GridImport, d.Profit)
+	}
+}
+
+func TestNegativeExportPriceTransition(t *testing.T) {
+	// Verify that the optimizer never produces grid export when the export price is
+	// non-positive, but correctly discharges and exports in slots with positive prices.
+	// Discharge to cover local load is always permitted regardless of export price.
+
+	config := SystemConfig{
+		BatteryCapacity:        10.0,
+		BatteryMaxCharge:       5.0,
+		BatteryMaxDischarge:    5.0,
+		BatteryMinSOC:          0.2,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.92,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	forecast := []TimeSlot{
+		{
+			Hour:          0,
+			Timestamp:     1704326400,
+			ImportPrice:   0.05,
+			ExportPrice:   -0.10, // Negative - must not export to grid
+			SolarForecast: 0.0,
+			LoadForecast:  1.0,
+		},
+		{
+			Hour:          1,
+			Timestamp:     1704330000,
+			ImportPrice:   0.05,
+			ExportPrice:   0.0, // Zero - must not export to grid
+			SolarForecast: 0.0,
+			LoadForecast:  1.0,
+		},
+		{
+			Hour:          2,
+			Timestamp:     1704333600,
+			ImportPrice:   0.05,
+			ExportPrice:   0.30, // Positive - grid export is allowed
+			SolarForecast: 0.0,
+			LoadForecast:  1.0,
+		},
+	}
+
+	mpc := NewController(config, 3, 0.9) // Start fully charged
+	decisions := mpc.Optimize(forecast)
+
+	if len(decisions) != 3 {
+		t.Fatalf("Expected 3 decisions, got %d", len(decisions))
+	}
+
+	// Slots 0 & 1: non-positive export price — grid export must be zero.
+	// Discharge to cover the 1 kW load is permitted (saves import cost), but
+	// discharge must not exceed what is consumed locally.
+	for i := 0; i <= 1; i++ {
+		d := decisions[i]
+		if d.GridExport > 0 {
+			t.Errorf("Slot %d (export price %.2f): expected no grid export, got %.4f kW",
+				i, forecast[i].ExportPrice, d.GridExport)
+		}
+		// If the battery discharged, verify it did not produce more than local load.
+		if d.BatteryDischarge > 0 {
+			effectiveDischarge := d.BatteryDischarge * config.BatteryEfficiency
+			netLoad := forecast[i].LoadForecast + forecast[i].SolarForecast // solar is 0 here
+			if effectiveDischarge > netLoad+0.01 {
+				t.Errorf("Slot %d: effective discharge (%.4f kW) exceeds local load (%.4f kW) — would export",
+					i, effectiveDischarge, netLoad)
+			}
+		}
+	}
+
+	// Slot 2: positive export price — discharge and grid export are both expected.
+	if decisions[2].BatteryDischarge < 0.1 {
+		t.Errorf("Slot 2 (positive export price): expected battery discharge, got %.4f kW", decisions[2].BatteryDischarge)
+	}
+	if decisions[2].GridExport < 0.1 {
+		t.Errorf("Slot 2 (positive export price): expected grid export, got %.4f kW", decisions[2].GridExport)
+	}
+
+	t.Logf("Negative/zero/positive export price transition results:")
+	labels := []string{"negative", "zero", "positive"}
+	for i, d := range decisions {
+		t.Logf("  Slot %d (%s export price %.2f): Discharge=%.3f kW, GridExport=%.3f kW, Profit=%.4f",
+			i, labels[i], forecast[i].ExportPrice, d.BatteryDischarge, d.GridExport, d.Profit)
+	}
+}

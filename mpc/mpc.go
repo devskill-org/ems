@@ -326,9 +326,23 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 		balance := netSupply - netLoad
 
 		if balance > 0 {
-			// Excess power - can export
-			dec.GridExport = math.Min(balance, mpc.Config.MaxGridExport)
-			dec.GridImport = 0
+			// Excess power - can only export when the export price is positive.
+			// When export price is negative or zero, skip any decision that would
+			// result in grid export: battery discharge that exceeds local consumption
+			// would waste stored energy (degradation cost) for zero or negative return.
+			// Solar-only excess is also curtailed rather than exported at a loss.
+			if slot.ExportPrice > 0 {
+				dec.GridExport = math.Min(balance, mpc.Config.MaxGridExport)
+				dec.GridImport = 0
+			} else if action.discharge > 0 {
+				// Discharging is causing the surplus — skip this decision entirely.
+				// The battery should only discharge to cover load, not to export.
+				continue
+			} else {
+				// Solar surplus with no export revenue — curtail, no grid interaction.
+				dec.GridExport = 0
+				dec.GridImport = 0
+			}
 		} else {
 			// Deficit - need to import
 			dec.GridImport = math.Min(-balance, mpc.Config.MaxGridImport)
