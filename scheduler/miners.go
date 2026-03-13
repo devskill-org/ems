@@ -328,13 +328,12 @@ func (s *MinerScheduler) runStateCheck(ctx context.Context) error {
 	// Check if PV power control is enabled
 	usePowerControl := s.config.UsePVPowerControl
 	effectiveLimit := s.config.MinersPowerLimit
-	var totalPower float64
+	totalPower := s.calculateTotalPowerConsumption(minersList)
 
 	if usePowerControl {
 		effectiveLimit = s.getEffecivePowerLimit(ctx)
-		totalPower = s.calculateTotalPowerConsumption(minersList)
-		s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
 	}
+	s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
 
 	var wg sync.WaitGroup
 	var powerMu sync.Mutex // Mutex to protect totalPower updates
