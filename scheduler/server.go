@@ -51,11 +51,11 @@ type Health struct {
 
 // MPCDecisionInfo represents MPC optimization decision information for API
 type MPCDecisionInfo struct {
-	Hour             int     `json:"hour"`
-	Timestamp        int64   `json:"timestamp"`
-	BatteryCharge    float64 `json:"battery_charge"`
-	BatteryDischarge float64 `json:"battery_discharge"`
-	GridImport       float64 `json:"grid_import"`
+	Hour                 int     `json:"hour"`
+	Timestamp            int64   `json:"timestamp"`
+	BatteryCharge        float64 `json:"battery_charge"`
+	BatteryDischarge     float64 `json:"battery_discharge"`
+	GridImport           float64 `json:"grid_import"`
 	GridExport           float64 `json:"grid_export"`
 	BatterySOC           float64 `json:"battery_soc"`
 	Profit               float64 `json:"profit"`
@@ -142,6 +142,7 @@ func NewWebServer(scheduler *MinerScheduler, port int) *WebServer {
 	mux.HandleFunc("/api/ws", hs.wsHandler)
 	mux.HandleFunc("/api/metrics/summary", hs.metricsSummaryHandler)
 	mux.HandleFunc("/api/miners/discover", hs.minersDiscoverHandler)
+	mux.HandleFunc("/api/config", hs.configHandler)
 
 	// Serve static files from web folder
 	fs := http.FileServer(http.Dir("./web/dist"))
@@ -206,23 +207,23 @@ func (hs *WebServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 	mpcDecisionsInfo := make([]MPCDecisionInfo, 0, len(mpcDecisions))
 	for _, dec := range mpcDecisions {
 		mpcDecisionsInfo = append(mpcDecisionsInfo, MPCDecisionInfo{
-			Hour:               dec.Hour,
-			Timestamp:          dec.Timestamp,
-			BatteryCharge:      dec.BatteryCharge,
-			BatteryDischarge:   dec.BatteryDischarge,
-			GridImport:         dec.GridImport,
+			Hour:                 dec.Hour,
+			Timestamp:            dec.Timestamp,
+			BatteryCharge:        dec.BatteryCharge,
+			BatteryDischarge:     dec.BatteryDischarge,
+			GridImport:           dec.GridImport,
 			GridExport:           dec.GridExport,
 			BatterySOC:           dec.BatterySOC,
 			Profit:               dec.Profit,
 			BatteryPreHeatActive: dec.BatteryPreHeatActive,
 			ImportPrice:          dec.ImportPrice,
-			ExportPrice:        dec.ExportPrice,
-			SolarForecast:      dec.SolarForecast,
-			LoadForecast:       dec.LoadForecast,
-			CloudCoverage:      dec.CloudCoverage,
-			WeatherSymbol:      dec.WeatherSymbol,
-			BatteryAvgCellTemp: dec.BatteryAvgCellTemp,
-			AirTemperature:     dec.AirTemperature,
+			ExportPrice:          dec.ExportPrice,
+			SolarForecast:        dec.SolarForecast,
+			LoadForecast:         dec.LoadForecast,
+			CloudCoverage:        dec.CloudCoverage,
+			WeatherSymbol:        dec.WeatherSymbol,
+			BatteryAvgCellTemp:   dec.BatteryAvgCellTemp,
+			AirTemperature:       dec.AirTemperature,
 		})
 	}
 
@@ -301,6 +302,81 @@ func (hs *WebServer) minersDiscoverHandler(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "discovery started"})
+}
+
+// configHandler handles GET and PUT /api/config endpoints.
+// GET returns the current scheduler configuration as JSON.
+// PUT accepts a full or partial JSON body, merges it over the current config,
+// validates it, and applies it to the running scheduler in memory.
+func (hs *WebServer) configHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		cfg := hs.scheduler.GetConfig()
+		if err := json.NewEncoder(w).Encode(cfg); err != nil {
+			http.Error(w, "Failed to encode config", http.StatusInternalServerError)
+		}
+
+	case http.MethodPut:
+		// Decode the incoming JSON on top of a copy of the current config so
+		// fields that are not present in the request body keep their values.
+		current := hs.scheduler.GetConfig()
+
+		// Marshal current config to JSON then unmarshal into a generic map so
+		// we can merge the incoming fields without losing duration formatting.
+		currentJSON, err := json.Marshal(current)
+		if err != nil {
+			http.Error(w, `{"error":"failed to read current config"}`, http.StatusInternalServerError)
+			return
+		}
+
+		var merged map[string]any
+		if err := json.Unmarshal(currentJSON, &merged); err != nil {
+			http.Error(w, `{"error":"failed to parse current config"}`, http.StatusInternalServerError)
+			return
+		}
+
+		var incoming map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&incoming); err != nil {
+			http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Shallow-merge: incoming keys overwrite current keys.
+		for k, v := range incoming {
+			merged[k] = v
+		}
+
+		// Re-encode the merged map and decode it through Config's custom
+		// UnmarshalJSON so that duration strings are handled correctly.
+		mergedJSON, err := json.Marshal(merged)
+		if err != nil {
+			http.Error(w, `{"error":"failed to merge config"}`, http.StatusInternalServerError)
+			return
+		}
+
+		newCfg := &Config{}
+		if err := json.Unmarshal(mergedJSON, newCfg); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		if err := newCfg.Validate(); err != nil {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		hs.scheduler.SetConfig(newCfg)
+
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(newCfg)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // metricsSummaryHandler handles the /api/metrics/summary endpoint
@@ -543,23 +619,23 @@ func (hs *WebServer) buildStatusData(ctx context.Context) map[string]any {
 	mpcDecisionsInfo := make([]MPCDecisionInfo, 0, len(mpcDecisions))
 	for _, dec := range mpcDecisions {
 		mpcDecisionsInfo = append(mpcDecisionsInfo, MPCDecisionInfo{
-			Hour:               dec.Hour,
-			Timestamp:          dec.Timestamp,
-			BatteryCharge:      dec.BatteryCharge,
-			BatteryDischarge:   dec.BatteryDischarge,
-			GridImport:         dec.GridImport,
+			Hour:                 dec.Hour,
+			Timestamp:            dec.Timestamp,
+			BatteryCharge:        dec.BatteryCharge,
+			BatteryDischarge:     dec.BatteryDischarge,
+			GridImport:           dec.GridImport,
 			GridExport:           dec.GridExport,
 			BatterySOC:           dec.BatterySOC,
 			Profit:               dec.Profit,
 			BatteryPreHeatActive: dec.BatteryPreHeatActive,
 			ImportPrice:          dec.ImportPrice,
-			ExportPrice:        dec.ExportPrice,
-			SolarForecast:      dec.SolarForecast,
-			LoadForecast:       dec.LoadForecast,
-			CloudCoverage:      dec.CloudCoverage,
-			WeatherSymbol:      dec.WeatherSymbol,
-			BatteryAvgCellTemp: dec.BatteryAvgCellTemp,
-			AirTemperature:     dec.AirTemperature,
+			ExportPrice:          dec.ExportPrice,
+			SolarForecast:        dec.SolarForecast,
+			LoadForecast:         dec.LoadForecast,
+			CloudCoverage:        dec.CloudCoverage,
+			WeatherSymbol:        dec.WeatherSymbol,
+			BatteryAvgCellTemp:   dec.BatteryAvgCellTemp,
+			AirTemperature:       dec.AirTemperature,
 		})
 	}
 

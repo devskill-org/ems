@@ -1,3 +1,55 @@
+export interface EmsConfig {
+  price_limit: number;
+  network: string;
+  check_price_interval: string;
+  miners_state_check_interval: string;
+  miner_discovery_interval: string;
+  miner_max_consecutive_errors: number;
+  dry_run: boolean;
+  security_token: string;
+  api_timeout: string;
+  url_format: string;
+  log_level: string;
+  log_format: string;
+  location: string;
+  miner_timeout: string;
+  health_check_port: number;
+  fanr_high_threshold: number;
+  fanr_low_threshold: number;
+  miners_power_limit: number;
+  miner_power_standby: number;
+  miner_power_eco: number;
+  miner_power_standard: number;
+  miner_power_super: number;
+  use_pv_power_control: boolean;
+  plant_modbus_address: string;
+  device_id: number;
+  pv_poll_interval: string;
+  pv_integration_period: string;
+  postgres_conn_string: string;
+  weather_update_interval: string;
+  latitude: number;
+  longitude: number;
+  user_agent: string;
+  battery_capacity: number;
+  battery_max_charge: number;
+  battery_max_discharge: number;
+  battery_min_soc: number;
+  battery_max_soc: number;
+  battery_efficiency: number;
+  battery_degradation_cost: number;
+  max_grid_import: number;
+  max_grid_export: number;
+  max_solar_power: number;
+  mpc_execution_interval: string;
+  battery_preheat_power: number;
+  battery_preheat_temp_threshold: number;
+  battery_thermal_time_constant: number;
+  import_price_operator_fee: number;
+  import_price_delivery_fee: number;
+  export_price_operator_fee: number;
+}
+
 export interface MPCDecisionInfo {
   hour: number;
   timestamp: number;

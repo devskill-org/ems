@@ -7,6 +7,7 @@ import { SolarInfo } from "./components/SolarInfo";
 import { MPCDecisions } from "./components/MPCDecisions";
 import { MetricsSummary } from "./components/MetricsSummary";
 import { DemoInfo } from "./components/DemoInfo";
+import { ConfigMenu } from "./components/ConfigMenu";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useConfig } from "./hooks/useConfig";
 import { useState, useEffect, useCallback } from "react";
@@ -15,9 +16,11 @@ import { useState, useEffect, useCallback } from "react";
 const isDemoMode = typeof __DEMO_MODE__ !== "undefined" && __DEMO_MODE__;
 
 function App() {
-  const { health, status, loading, error, wsConnected, triggerDiscovery } = useWebSocket();
+  const { health, status, loading, error, wsConnected, triggerDiscovery } =
+    useWebSocket();
   const config = useConfig();
   const [showDemoInfo, setShowDemoInfo] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryMessage, setDiscoveryMessage] = useState<string | null>(null);
 
@@ -111,6 +114,14 @@ function App() {
             activeLabel="🔗 Connected"
             inactiveLabel="⚠️ Disconnected"
           />
+          <button
+            className="demo-info-trigger"
+            onClick={() => setShowConfig(true)}
+            title="Open configuration"
+            aria-label="Open configuration"
+          >
+            ⚙️
+          </button>
         </div>
       </header>
 
@@ -179,7 +190,8 @@ function App() {
             <div className="miners-list">
               {status.miners.list.map((miner, index) => (
                 <div key={miner.dna ?? index} className="miner-item">
-                  {(miner.filter_usage !== undefined || miner.fan_r !== undefined) && (
+                  {(miner.filter_usage !== undefined ||
+                    miner.fan_r !== undefined) && (
                     <div className="miner-badges">
                       {miner.filter_usage !== undefined && (
                         <div
@@ -213,13 +225,15 @@ function App() {
                       window.open(
                         `http://${miner.ip}`,
                         "_blank",
-                        "noopener,noreferrer"
+                        "noopener,noreferrer",
                       )
                     }
                     title={`Open http://${miner.ip}`}
                     style={{ cursor: "pointer" }}
                   >
-                    {(miner.dna && config.miner_names[miner.dna]) ?? miner.dna ?? miner.ip}
+                    {(miner.dna && config.miner_names[miner.dna]) ??
+                      miner.dna ??
+                      miner.ip}
                   </div>
                   <div
                     className={`miner-status status-${miner.status?.toLowerCase()}`}
@@ -364,6 +378,8 @@ function App() {
       {isDemoMode && showDemoInfo && (
         <DemoInfo onClose={() => setShowDemoInfo(false)} />
       )}
+
+      {showConfig && <ConfigMenu onClose={() => setShowConfig(false)} />}
     </div>
   );
 }
