@@ -155,14 +155,19 @@ func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64)
 
 	// Check if PV power control is enabled
 	usePowerControl := s.config.UsePVPowerControl
+
+	// Always enforce MinersPowerLimit; when PV power control is enabled the effective
+	// limit may be further reduced to the available PV power.
 	var effectiveLimit float64
 	var totalPower float64
 
 	if usePowerControl {
 		effectiveLimit = s.getEffecivePowerLimit(ctx)
-		totalPower = s.calculateTotalPowerConsumption(minersList)
-		s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
+	} else {
+		effectiveLimit = s.config.MinersPowerLimit
 	}
+	totalPower = s.calculateTotalPowerConsumption(minersList)
+	s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
 
 	// Standard price-based control
 	var wg sync.WaitGroup
@@ -188,21 +193,19 @@ func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64)
 				// Price is low enough - wake up miners (if power allows)
 				if currentState == miners.AvalonStateStandBy {
 					// Check if we have power budget for waking up this miner
-					if usePowerControl {
-						additionalPower := s.config.MinerPowerEco // Wake up in Eco mode
+					additionalPower := s.config.MinerPowerEco // Wake up in Eco mode
 
-						// Lock to safely check and update totalPower
-						powerMu.Lock()
-						if totalPower+additionalPower > effectiveLimit {
-							s.logger.Printf("Miner %s:%d cannot wake up: would exceed power limit (%.2f + %.2f > %.2f kW)",
-								m.Address, m.Port, totalPower, additionalPower, effectiveLimit)
-							powerMu.Unlock()
-							return
-						}
-						// Reserve power for this miner
-						totalPower += additionalPower
+					// Lock to safely check and update totalPower
+					powerMu.Lock()
+					if totalPower+additionalPower > effectiveLimit {
+						s.logger.Printf("Miner %s:%d cannot wake up: would exceed power limit (%.2f + %.2f > %.2f kW)",
+							m.Address, m.Port, totalPower, additionalPower, effectiveLimit)
 						powerMu.Unlock()
+						return
 					}
+					// Reserve power for this miner
+					totalPower += additionalPower
+					powerMu.Unlock()
 
 					if isDryRun {
 						s.logger.Printf("DRY-RUN: Would wake up miner %s:%d (price %.2f <= limit %.2f)",
@@ -218,12 +221,6 @@ func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64)
 						return
 					}
 					s.logger.Printf("WakeUp response for miner %s:%d: %s", m.Address, m.Port, response)
-					// Reserve power for this miner
-					if usePowerControl {
-						powerMu.Lock()
-						totalPower += s.config.MinerPowerEco
-						powerMu.Unlock()
-					}
 				} else {
 					s.logger.Printf("Miner %s:%d is already in %s state, no action needed",
 						m.Address, m.Port, currentState.String())
@@ -245,13 +242,11 @@ func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64)
 						}
 
 						// Update totalPower after successful standby
-						if usePowerControl {
-							powerMu.Lock()
-							releasedPower := s.getMinerPowerConsumption(currentState, m.LastStats.WorkMode)
-							totalPower -= releasedPower
-							totalPower += s.config.MinerPowerStandby
-							powerMu.Unlock()
-						}
+						powerMu.Lock()
+						releasedPower := s.getMinerPowerConsumption(currentState, m.LastStats.WorkMode)
+						totalPower -= releasedPower
+						totalPower += s.config.MinerPowerStandby
+						powerMu.Unlock()
 
 						s.logger.Printf("Standby response for miner %s:%d: %s", m.Address, m.Port, response)
 					}
