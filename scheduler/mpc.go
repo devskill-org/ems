@@ -480,31 +480,49 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	var mode uint16
 
 	if decision.BatteryChargeFromPV > 0.01 || decision.BatteryChargeFromGrid > 0.01 {
-		// Battery should charge
-		// Use BatteryChargeFromPV as the charge limit
-		chargeLimit := decision.BatteryChargeFromPV
-
-		// Decide mode based on whether grid charging is needed
+		// Battery should charge.
+		// Decide mode based on whether grid charging is also needed.
 		if decision.BatteryChargeFromGrid > 0.01 {
-			// Mode 4: Command charging (PV first, then grid) - charge from PV and grid if needed
+			// Mode 4: Command charging (PV first, then grid).
+			// The charge limit must be the total desired charge rate so that the
+			// inverter can draw from both PV surplus and the grid to reach it.
+			// Clamp to BatteryMaxCharge: the inverter rejects any value above the
+			// hardware-rated maximum with a Modbus illegal-data-address exception.
 			mode = 4
-			s.logger.Printf("Setting battery to CHARGE mode (PV + Grid): ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW",
-				decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid)
+			chargeLimit := math.Min(
+				decision.BatteryChargeFromPV+decision.BatteryChargeFromGrid,
+				config.BatteryMaxCharge,
+			)
+			s.logger.Printf("Setting battery to CHARGE mode (PV + Grid): ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW, TotalLimit: %.1f kW",
+				decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, chargeLimit)
+
+			// Set Remote EMS control mode
+			if err := client.SetRemoteEMSMode(mode); err != nil {
+				return fmt.Errorf("failed to set remote EMS mode: %w", err)
+			}
+
+			// Set ESS max charging limit to the combined PV + grid charge rate
+			if err := client.SetESSMaxChargingLimit(chargeLimit); err != nil {
+				return fmt.Errorf("failed to set ESS charging limit: %w", err)
+			}
 		} else {
-			// Mode 2: Self-use mode - charge from PV surplus only
+			// Mode 2: Self-use mode — charge from PV surplus only.
+			// The charge limit is the PV-sourced charge rate; the inverter will
+			// naturally use only the available PV surplus up to this limit.
 			mode = 2
+			chargeLimit := decision.BatteryChargeFromPV
 			s.logger.Printf("Setting battery to CHARGE mode (PV only): ChargeFromPV: %.1f kW",
 				decision.BatteryChargeFromPV)
-		}
 
-		// Set Remote EMS control mode
-		if err := client.SetRemoteEMSMode(mode); err != nil {
-			return fmt.Errorf("failed to set remote EMS mode: %w", err)
-		}
+			// Set Remote EMS control mode
+			if err := client.SetRemoteEMSMode(mode); err != nil {
+				return fmt.Errorf("failed to set remote EMS mode: %w", err)
+			}
 
-		// Set ESS max charging limit
-		if err := client.SetESSMaxChargingLimit(chargeLimit); err != nil {
-			return fmt.Errorf("failed to set ESS charging limit: %w", err)
+			// Set ESS max charging limit to the PV-only charge rate
+			if err := client.SetESSMaxChargingLimit(chargeLimit); err != nil {
+				return fmt.Errorf("failed to set ESS charging limit: %w", err)
+			}
 		}
 
 	} else if decision.BatteryDischarge > 0.01 {

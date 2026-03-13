@@ -88,22 +88,47 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	// Run optimization with full solar forecast
 	decisionsWithSolar := mpc.optimizeWithForecast(forecast, true)
 
-	// Run optimization without solar (grid-only scenario)
+	// Run optimization without solar (grid-only scenario).
+	// This is used to determine how much grid charging is profitable regardless
+	// of solar, so that we still charge from the grid when the solar forecast is
+	// inaccurate (e.g. cloudy day with optimistic forecast).
 	decisionsWithoutSolar := mpc.optimizeWithForecast(forecast, false)
 
-	// Combine results: split BatteryCharge into PV and Grid components
+	// Combine results: split BatteryCharge into PV and Grid components.
+	//
+	// The solar-scenario decision already accounts for the full charge rate
+	// (PV surplus first, topped up by grid when profitable). We derive the
+	// PV portion as whatever charge the solar surplus can cover, and treat
+	// the remainder as the grid portion.
 	finalDecisions := make([]ControlDecision, len(decisionsWithSolar))
 	for i := range decisionsWithSolar {
 		finalDecisions[i] = decisionsWithSolar[i]
 
-		// BatteryChargeFromPV is the charge power when solar is available
-		finalDecisions[i].BatteryChargeFromPV = decisionsWithSolar[i].BatteryCharge
+		slot := forecast[i]
+		totalCharge := decisionsWithSolar[i].BatteryCharge
 
-		// BatteryChargeFromGrid is the charge power when solar is zero
-		finalDecisions[i].BatteryChargeFromGrid = decisionsWithoutSolar[i].BatteryCharge
+		// PV surplus available for charging after serving the load.
+		// BatteryCharge/eff is the actual power drawn from the supply side to
+		// push `totalCharge` kW into the battery.
+		pvSurplus := math.Max(0, slot.SolarForecast-slot.LoadForecast)
+
+		// The PV portion is how much of the charge is covered by PV surplus
+		// (capped at the total charge being applied).
+		pvPortion := math.Min(pvSurplus, totalCharge)
+
+		// The grid portion is whatever the without-solar scenario recommends,
+		// but never more than what remains of BatteryMaxCharge after the PV
+		// portion is accounted for. This ensures pvPortion+gridPortion never
+		// exceeds the hardware-rated maximum charge power, which would cause
+		// the inverter to reject the register write with an illegal-data error.
+		gridPortion := math.Min(decisionsWithoutSolar[i].BatteryCharge, mpc.Config.BatteryMaxCharge-pvPortion)
+		gridPortion = math.Max(0, gridPortion)
+
+		finalDecisions[i].BatteryChargeFromPV = pvPortion
+		finalDecisions[i].BatteryChargeFromGrid = gridPortion
 
 		// Keep total BatteryCharge for backward compatibility
-		finalDecisions[i].BatteryCharge = decisionsWithSolar[i].BatteryCharge
+		finalDecisions[i].BatteryCharge = totalCharge
 	}
 
 	return finalDecisions
@@ -326,21 +351,45 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 		balance := netSupply - netLoad
 
 		if balance > 0 {
-			// Excess power - can only export when the export price is positive.
-			// When export price is negative or zero, skip any decision that would
-			// result in grid export: battery discharge that exceeds local consumption
-			// would waste stored energy (degradation cost) for zero or negative return.
-			// Solar-only excess is also curtailed rather than exported at a loss.
-			if slot.ExportPrice > 0 {
-				dec.GridExport = math.Min(balance, mpc.Config.MaxGridExport)
-				dec.GridImport = 0
-			} else if action.discharge > 0 {
-				// Discharging is causing the surplus — skip this decision entirely.
-				// The battery should only discharge to cover load, not to export.
-				continue
+			// Excess power available after serving load and the current charge action.
+			if action.discharge > 0 {
+				// Discharging is causing (or contributing to) the surplus.
+				// Only allow this if we can export at a positive price; otherwise
+				// we would waste stored energy for zero or negative return.
+				if slot.ExportPrice > 0 {
+					dec.GridExport = math.Min(balance, mpc.Config.MaxGridExport)
+					dec.GridImport = 0
+				} else {
+					// Skip: discharging into a non-positive export price is wasteful.
+					continue
+				}
 			} else {
-				// Solar surplus with no export revenue — curtail, no grid interaction.
-				dec.GridExport = 0
+				// Solar is producing the surplus. Prefer absorbing it into the
+				// battery before exporting. We already enumerated a charge level
+				// (action.charge) for this iteration; the remaining surplus after
+				// charging is what we consider exporting.
+				//
+				// Note: the surplus here already accounts for action.charge (it is
+				// in netLoad), so `balance` is the PV power that still has nowhere
+				// to go. Try to increase charging to absorb it — but only up to the
+				// hardware maximum and SOC limits.
+				extraCharge := math.Min(balance*mpc.Config.BatteryEfficiency, mpc.Config.BatteryMaxCharge-action.charge)
+				if extraCharge > 0 && mpc.canCharge(currentSOC, action.charge+extraCharge) {
+					// Absorb as much surplus as possible into the battery.
+					dec.BatteryCharge += extraCharge
+					// Recalculate balance after the extra charging.
+					balance -= extraCharge / mpc.Config.BatteryEfficiency
+				}
+
+				if balance > 0.001 {
+					// There is still remaining surplus after maxing out charging.
+					if slot.ExportPrice > 0 {
+						dec.GridExport = math.Min(balance, mpc.Config.MaxGridExport)
+					} else {
+						// Negative or zero export price — curtail the remainder.
+						dec.GridExport = 0
+					}
+				}
 				dec.GridImport = 0
 			}
 		} else {
