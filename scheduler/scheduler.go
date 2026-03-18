@@ -24,7 +24,22 @@ type PeriodicTask struct {
 	err           error
 }
 
-// run executes the periodic task in a loop, respecting the initial delay and context cancellation
+// nextAlignedTick returns the duration until the next wall-clock boundary that is
+// a multiple of interval from the Unix epoch (i.e. aligned to absolute time, not
+// relative to when the timer was created).
+func nextAlignedTick(now time.Time, interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return interval
+	}
+	// How far into the current interval are we?
+	elapsed := now.UnixNano() % int64(interval)
+	remaining := int64(interval) - elapsed
+	return time.Duration(remaining)
+}
+
+// run executes the periodic task in a loop, respecting the initial delay and context cancellation.
+// It uses wall-clock-aligned timers instead of a plain ticker so that execution boundaries
+// stay in sync with absolute time regardless of how long each task run takes.
 func (pt *PeriodicTask) run(ctx context.Context, stopChan <-chan struct{}, logger *log.Logger) {
 	// Wait for initial delay
 	if pt.initialDelay > 0 {
@@ -47,28 +62,36 @@ func (pt *PeriodicTask) run(ctx context.Context, stopChan <-chan struct{}, logge
 		pt.err = pt.runFunc()
 	}
 
-	// Create ticker for periodic execution
-	ticker := time.NewTicker(pt.interval)
-	defer ticker.Stop()
+	// Use a wall-clock-aligned timer rather than a plain ticker.
+	// After each tick we reset the timer to fire exactly at the next interval
+	// boundary, compensating for any time spent inside runFunc and eliminating
+	// cumulative drift.
+	timer := time.NewTimer(nextAlignedTick(time.Now(), pt.interval))
+	defer timer.Stop()
 
-	// Default value, but the retry is disabled if the pt.retryInterval is nil
+	// Retry timer — disabled (fires once per hour and is gated by pt.retryInterval==nil)
+	// when retries are not configured.
 	retryInterval := time.Hour
 	if pt.retryInterval != nil {
 		retryInterval = *pt.retryInterval
 	}
-	retryTicker := time.NewTicker(retryInterval)
-	defer retryTicker.Stop()
+	retryTimer := time.NewTimer(retryInterval)
+	defer retryTimer.Stop()
 
 	logger.Printf("[%s] Started with interval: %v", pt.name, pt.interval)
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			pt.err = pt.runFunc()
-		case <-retryTicker.C:
+			// Re-arm for the next aligned boundary.
+			timer.Reset(nextAlignedTick(time.Now(), pt.interval))
+		case <-retryTimer.C:
 			if pt.retryInterval != nil && pt.err != nil {
 				pt.err = pt.runFunc()
 			}
+			// Re-arm retry timer.
+			retryTimer.Reset(retryInterval)
 		case <-ctx.Done():
 			logger.Printf("[%s] Stopped due to context cancellation", pt.name)
 			return
