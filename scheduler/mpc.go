@@ -405,6 +405,14 @@ func (s *MinerScheduler) estimateSolarPowerFromWeather(forecast *meteo.METJSONFo
 // Follows the same logic as manageMiners: miners wake up in Eco mode when price <= limit,
 // but only if there's enough power budget (when PV power control is enabled)
 // When miners are not running, they still consume standby power
+// estimateLoadForecast estimates the total power consumption of all miners for a given
+// time slot, taking into account the spot price, price limit, solar availability, and
+// whether PV power control is enabled.
+//
+// When usePowerControl is enabled the function finds the highest work mode (Super →
+// Standard → Eco) whose per-miner power consumption allows at least one miner to run
+// within the effective power limit (min(solarForecast, MinersPowerLimit)).  All miners
+// that fit at that mode are assumed to be running; the remainder are in standby.
 func (s *MinerScheduler) estimateLoadForecast(hourlyPrice float64, priceLimit float64, solarForecast float64, config *Config) float64 {
 	// Convert hourlyPrice from EUR/MWh to EUR/kWh for comparison with priceLimit
 	hourlyPricePerKWh := hourlyPrice / 1000.0
@@ -415,46 +423,61 @@ func (s *MinerScheduler) estimateLoadForecast(hourlyPrice float64, priceLimit fl
 		return 0.0
 	}
 
+	numMiners := len(minersList)
+
 	// Miners are only ON if price is below or equal the limit
 	// Otherwise they consume standby power
 	if hourlyPricePerKWh > priceLimit {
 		// All miners are in standby mode
-		return float64(len(minersList)) * config.MinerPowerStandby
+		return float64(numMiners) * config.MinerPowerStandby
 	}
 
 	// Check if PV power control is enabled
-	usePowerControl := config.UsePVPowerControl
-	if !usePowerControl {
+	if !config.UsePVPowerControl {
 		// Without PV power control, miners can run but total power must not exceed
 		// the configured MinersPowerLimit.
-		totalMinerPower := float64(len(minersList)) * config.MinerPowerSuper
+		totalMinerPower := float64(numMiners) * config.MinerPowerSuper
 		if totalMinerPower > config.MinersPowerLimit {
 			totalMinerPower = config.MinersPowerLimit
 		}
 		return totalMinerPower
 	}
 
-	// With power control enabled, calculate effective power limit
-	// Use minimum of available solar power and configured miners power limit
+	// With power control enabled, derive the effective limit from the solar forecast
+	// capped at the configured miners power limit.
 	effectiveLimit := config.MinersPowerLimit
 	if solarForecast < effectiveLimit {
 		effectiveLimit = solarForecast
 	}
 
-	// Calculate how many miners can run within the effective limit
-	// Miners wake up in Eco mode (as per manageMiners logic)
-	minerPowerEco := config.MinerPowerEco
-	if minerPowerEco <= 0 {
-		minerPowerEco = 1.0 // Default fallback
+	// Try each work mode from highest to lowest.  Use the first (highest) mode where
+	// at least one miner can run within the effective limit.
+	type modeEntry struct {
+		power float64
+	}
+	modes := []modeEntry{
+		{config.MinerPowerSuper},
+		{config.MinerPowerStandard},
+		{config.MinerPowerEco},
 	}
 
-	maxMinersCanRun := int(effectiveLimit / minerPowerEco)
-	actualMinersRunning := min(maxMinersCanRun, len(minersList))
-	minersInStandby := len(minersList) - actualMinersRunning
+	for _, m := range modes {
+		perMinerPower := m.power
+		if perMinerPower <= 0 {
+			continue
+		}
+		maxCanRun := int(effectiveLimit / perMinerPower)
+		if maxCanRun <= 0 {
+			// This mode consumes more than the available solar — try a lower mode
+			continue
+		}
+		actualRunning := min(maxCanRun, numMiners)
+		inStandby := numMiners - actualRunning
+		return float64(actualRunning)*perMinerPower + float64(inStandby)*config.MinerPowerStandby
+	}
 
-	// Total power = running miners in Eco mode + standby miners in standby mode
-	totalMinerPower := float64(actualMinersRunning)*minerPowerEco + float64(minersInStandby)*config.MinerPowerStandby
-	return totalMinerPower
+	// No mode fits within the effective limit — all miners stay in standby
+	return float64(numMiners) * config.MinerPowerStandby
 }
 
 // executeMPCDecision executes the first MPC control decision
