@@ -97,6 +97,12 @@ func (c *SigenModbusClient) ReadPlantRunningInfo() (*PlantRunningInfo, error) {
 		info.ESSSOH = float64(bytesToU16(data2[8:10])) / 10.0
 	}
 
+	// Read DC Charger and ESS cell temperature from first inverter (slave address 1)
+	// Registers 31502-31504 are Hybrid Inverter registers (section 5.3) and only respond
+	// to slave addresses 1-246, NOT the plant address 247.
+	// Note: This assumes at least one hybrid inverter is present with slave ID 1
+	c.SetSlaveID(1)
+
 	// Read DC Charger data (31502-31504)
 	data3, err := c.client.ReadInputRegisters(31502, 3)
 	if err == nil {
@@ -104,9 +110,6 @@ func (c *SigenModbusClient) ReadPlantRunningInfo() (*PlantRunningInfo, error) {
 		info.DCChargerVehicleSOC = float64(bytesToU16(data3[4:6])) / 10.0
 	}
 
-	// Read ESS Average Cell Temperature from first inverter (slave address 1, register 30603)
-	// Note: This assumes at least one hybrid inverter is present with slave ID 1
-	c.SetSlaveID(1)
 	data4, err := c.client.ReadInputRegisters(30603, 1)
 	if err == nil {
 		info.ESSAvgCellTemperature = float64(bytesToS16(data4[0:2])) / 10.0
