@@ -46,28 +46,60 @@ type DownloadOptions struct {
 
 // DownloadPublicationMarketData downloads and decodes publication market data for the current and next day if needed.
 // fetchNextDay indicates whether to also download data for the next day (e.g. when it is past 13:30).
-func DownloadPublicationMarketData(ctx context.Context, securityToken string, urlFormat string, location *time.Location, fetchNextDay bool) (*PublicationMarketData, error) {
+// cache is an optional XMLDocumentCache; when non-nil, cached entries are returned instead of fetching from the network.
+func DownloadPublicationMarketData(ctx context.Context, securityToken string, urlFormat string, location *time.Location, fetchNextDay bool, cache *XMLDocumentCache) (*PublicationMarketData, error) {
 
 	now := time.Now().In(location)
-	url := buildPublicationMarketDataURL(securityToken, urlFormat, now)
-	fmt.Println(url)
-
 	client := NewAPIClient()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	marketDocument, err := client.DownloadPublicationMarketData(ctx, url)
-	if err != nil {
-		return nil, err
+
+	// Retrieve today's market data – use cache when available.
+	todayKey := now.Format("2006-01-02")
+	var marketDocument *PublicationMarketData
+	if cache != nil {
+		if cached, ok := cache.Get(todayKey); ok {
+			fmt.Printf("Using cached market data for %s\n", todayKey)
+			marketDocument = cached
+		}
 	}
 
-	// If instructed, also download data for the next day
-	if fetchNextDay {
-		tomorrow := now.AddDate(0, 0, 1)
-		urlNextDay := buildPublicationMarketDataURL(securityToken, urlFormat, tomorrow)
-
-		marketDocumentNextDay, err := client.DownloadPublicationMarketData(ctx, urlNextDay)
+	if marketDocument == nil {
+		url := buildPublicationMarketDataURL(securityToken, urlFormat, now)
+		fmt.Println(url)
+		var err error
+		marketDocument, err = client.DownloadPublicationMarketData(ctx, url)
 		if err != nil {
 			return nil, err
+		}
+		if cache != nil {
+			cache.StoreDocument(todayKey, marketDocument, CacheSourceDownload)
+		}
+	}
+
+	// If instructed, also retrieve data for the next day.
+	if fetchNextDay {
+		tomorrow := now.AddDate(0, 0, 1)
+		tomorrowKey := tomorrow.Format("2006-01-02")
+
+		var marketDocumentNextDay *PublicationMarketData
+		if cache != nil {
+			if cached, ok := cache.Get(tomorrowKey); ok {
+				fmt.Printf("Using cached market data for %s\n", tomorrowKey)
+				marketDocumentNextDay = cached
+			}
+		}
+
+		if marketDocumentNextDay == nil {
+			urlNextDay := buildPublicationMarketDataURL(securityToken, urlFormat, tomorrow)
+			var err error
+			marketDocumentNextDay, err = client.DownloadPublicationMarketData(ctx, urlNextDay)
+			if err != nil {
+				return nil, err
+			}
+			if cache != nil {
+				cache.StoreDocument(tomorrowKey, marketDocumentNextDay, CacheSourceDownload)
+			}
 		}
 
 		// Merge the data from both days

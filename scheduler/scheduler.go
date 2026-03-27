@@ -115,6 +115,9 @@ type MinerScheduler struct {
 	stopChan               chan struct{}
 	mu                     sync.RWMutex
 
+	// XML document cache for manually uploaded market data (bypasses ENTSO-E API).
+	xmlCache *entsoe.XMLDocumentCache
+
 	// Weather forecast cache
 	weatherCache WeatherForecastCache
 
@@ -145,6 +148,7 @@ func NewMinerScheduler(config *Config, logger *log.Logger) *MinerScheduler {
 		config:   config,
 		stopChan: make(chan struct{}),
 		logger:   logger,
+		xmlCache: entsoe.NewXMLDocumentCache(),
 		weatherCache: WeatherForecastCache{
 			cacheDuration: 2 * time.Hour,
 		},

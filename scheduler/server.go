@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -143,6 +145,8 @@ func NewWebServer(scheduler *MinerScheduler, port int) *WebServer {
 	mux.HandleFunc("/api/metrics/summary", hs.metricsSummaryHandler)
 	mux.HandleFunc("/api/miners/discover", hs.minersDiscoverHandler)
 	mux.HandleFunc("/api/config", hs.configHandler)
+	mux.HandleFunc("/api/market-data/upload", hs.marketDataUploadHandler)
+	mux.HandleFunc("/api/market-data/cache", hs.marketDataCacheHandler)
 
 	// Serve static files from web folder
 	fs := http.FileServer(http.Dir("./web/dist"))
@@ -716,6 +720,114 @@ func (hs *WebServer) buildStatusData(ctx context.Context) map[string]any {
 // Helper functions
 
 // formatUptime formats a duration as a string with seconds rounded to integer
+// marketDataUploadHandler handles POST /api/market-data/upload.
+// It expects a multipart/form-data body with two fields:
+//   - "date" – a date string in YYYY-MM-DD format.
+//   - "file" – the XML document (Publication_MarketDocument).
+//
+// On success the parsed document is stored in the XML document cache so that
+// DownloadPublicationMarketData will use it instead of fetching from ENTSO-E.
+func (hs *WebServer) marketDataUploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Parse multipart form – limit body to 10 MB.
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to parse form: " + err.Error()})
+		return
+	}
+
+	// Validate date field.
+	date := r.FormValue("date")
+	if date == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "date field is required"})
+		return
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid date format, expected YYYY-MM-DD"})
+		return
+	}
+
+	// Retrieve uploaded file.
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "file field is required"})
+		return
+	}
+	defer file.Close()
+
+	xmlData, err := io.ReadAll(file)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to read uploaded file"})
+		return
+	}
+
+	// Parse the XML and store it in the cache.
+	if err := hs.scheduler.StoreMarketDataXML(date, xmlData); err != nil {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to parse XML: " + err.Error()})
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "date": date})
+}
+
+// marketDataCacheHandler handles GET and DELETE /api/market-data/cache.
+//
+// GET returns a JSON object with an "entries" array listing all cached documents.
+// DELETE removes a single entry identified by the "date" query parameter (YYYY-MM-DD).
+func (hs *WebServer) marketDataCacheHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	switch r.Method {
+	case http.MethodGet:
+		type EntryInfo struct {
+			Date       string    `json:"date"`
+			UploadedAt time.Time `json:"uploaded_at"`
+			Source     string    `json:"source"`
+		}
+
+		raw := hs.scheduler.GetXMLCacheEntries()
+		result := make([]EntryInfo, 0, len(raw))
+		for _, e := range raw {
+			result = append(result, EntryInfo{
+				Date:       e.Date,
+				UploadedAt: e.UploadedAt,
+				Source:     string(e.Source),
+			})
+		}
+		sort.Slice(result, func(i, j int) bool {
+			return result[i].Date < result[j].Date
+		})
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"entries": result})
+
+	case http.MethodDelete:
+		date := r.URL.Query().Get("date")
+		if date == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "date query parameter is required"})
+			return
+		}
+
+		hs.scheduler.DeleteMarketDataXML(date)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "date": date})
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func formatUptime(d time.Duration) string {
 	d = d.Round(time.Second)
 	h := d / time.Hour

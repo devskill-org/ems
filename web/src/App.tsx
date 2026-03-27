@@ -8,6 +8,7 @@ import { MPCDecisions } from "./components/MPCDecisions";
 import { MetricsSummary } from "./components/MetricsSummary";
 import { DemoInfo } from "./components/DemoInfo";
 import { ConfigMenu } from "./components/ConfigMenu";
+import { MarketDataUpload } from "./components/MarketDataUpload";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useConfig } from "./hooks/useConfig";
 import { useState, useEffect, useCallback } from "react";
@@ -21,6 +22,7 @@ function App() {
   const config = useConfig();
   const [showDemoInfo, setShowDemoInfo] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
+  const [showMarketDataUpload, setShowMarketDataUpload] = useState(false);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryMessage, setDiscoveryMessage] = useState<string | null>(null);
 
@@ -114,6 +116,14 @@ function App() {
             activeLabel="🔗 Connected"
             inactiveLabel="⚠️ Disconnected"
           />
+          <button
+            className="demo-info-trigger"
+            onClick={() => setShowMarketDataUpload(true)}
+            title="Upload market data XML"
+            aria-label="Upload market data XML"
+          >
+            📋
+          </button>
           <button
             className="demo-info-trigger"
             onClick={() => setShowConfig(true)}
@@ -380,6 +390,10 @@ function App() {
       )}
 
       {showConfig && <ConfigMenu onClose={() => setShowConfig(false)} />}
+
+      {showMarketDataUpload && (
+        <MarketDataUpload onClose={() => setShowMarketDataUpload(false)} />
+      )}
     </div>
   );
 }

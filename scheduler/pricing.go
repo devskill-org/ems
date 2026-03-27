@@ -8,6 +8,23 @@ import (
 	"github.com/devskill-org/ems/entsoe"
 )
 
+// StoreMarketDataXML parses the given XML bytes and stores the resulting document
+// in the XML document cache under the given date key (YYYY-MM-DD format).
+func (s *MinerScheduler) StoreMarketDataXML(date string, xmlData []byte) error {
+	return s.xmlCache.Store(date, xmlData)
+}
+
+// DeleteMarketDataXML removes the cached XML document for the given date key.
+func (s *MinerScheduler) DeleteMarketDataXML(date string) {
+	s.xmlCache.Delete(date)
+}
+
+// GetXMLCacheEntries returns a snapshot of all entries currently held in the
+// XML document cache.
+func (s *MinerScheduler) GetXMLCacheEntries() []entsoe.CacheEntry {
+	return s.xmlCache.ListEntries()
+}
+
 // GetPricesMarketData returns the cached PublicationMarketData without downloading
 func (s *MinerScheduler) GetPricesMarketData() *entsoe.PublicationMarketData {
 	s.mu.RLock()
@@ -57,7 +74,7 @@ func (s *MinerScheduler) GetMarketData(ctx context.Context) (*entsoe.Publication
 
 	// Perform the network download WITHOUT holding the lock so other goroutines
 	// (GetConfig, runStateCheck, etc.) are never blocked during I/O.
-	newDoc, err := entsoe.DownloadPublicationMarketData(ctx, s.config.SecurityToken, s.config.URLFormat, location, fetchNextDay)
+	newDoc, err := entsoe.DownloadPublicationMarketData(ctx, s.config.SecurityToken, s.config.URLFormat, location, fetchNextDay, s.xmlCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download PublicationMarketData: %w", err)
 	}
@@ -97,6 +114,14 @@ func (s *MinerScheduler) runMarketDataRefresh(ctx context.Context) error {
 	}
 
 	now := time.Now().In(location)
+
+	// Cleanup past-day entries from the XML document cache on every tick.
+	// YYYY-MM-DD strings sort lexicographically, so a simple string comparison
+	// is sufficient to identify stale entries.
+	todayKey := now.Format("2006-01-02")
+	if removed := s.xmlCache.Cleanup(todayKey); removed > 0 {
+		s.logger.Printf("[MarketDataRefresh] Removed %d past-day XML document(s) from cache", removed)
+	}
 
 	s.mu.RLock()
 	marketData := s.pricesMarketData
