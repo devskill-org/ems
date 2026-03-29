@@ -121,6 +121,9 @@ type MinerScheduler struct {
 	// Weather forecast cache
 	weatherCache WeatherForecastCache
 
+	// Solar irradiance forecast cache (Open-Meteo)
+	solarForecastCache SolarForecastCache
+
 	// MPC optimization results
 	mpcDecisions         []mpc.ControlDecision
 	lastExecutedDecision *mpc.ControlDecision // Tracks the last successfully executed decision
@@ -151,6 +154,9 @@ func NewMinerScheduler(config *Config, logger *log.Logger) *MinerScheduler {
 		xmlCache: entsoe.NewXMLDocumentCache(),
 		weatherCache: WeatherForecastCache{
 			cacheDuration: 2 * time.Hour,
+		},
+		solarForecastCache: SolarForecastCache{
+			cacheDuration: 1 * time.Hour,
 		},
 	}
 
