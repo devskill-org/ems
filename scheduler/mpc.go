@@ -8,6 +8,7 @@ import (
 
 	"github.com/devskill-org/ems/meteo"
 	"github.com/devskill-org/ems/mpc"
+	"github.com/devskill-org/ems/openmeteo"
 	"github.com/devskill-org/ems/sigenergy"
 	"github.com/sixdouglas/suncalc"
 )
@@ -238,7 +239,9 @@ type WeatherData struct {
 	AirTemperature float64 // °C air temperature
 }
 
-// getSolarForecast gets solar power forecast from weather data at slotDuration resolution
+// getSolarForecast gets solar power forecast using Open-Meteo irradiance data at slotDuration resolution.
+// Weather metadata (cloud coverage, symbol, temperature) is still sourced from the MET Norway forecast.
+// Falls back to weather-based estimation if the Open-Meteo forecast is unavailable.
 func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, slotDuration time.Duration, weatherForecast *meteo.METJSONForecast, plantInfo *sigenergy.PlantRunningInfo) (map[int]float64, map[int]WeatherData, error) {
 	if weatherForecast == nil || weatherForecast.Properties == nil {
 		return nil, nil, fmt.Errorf("invalid weather forecast data")
@@ -250,23 +253,48 @@ func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, slotDur
 		currentPVPower = plantInfo.PhotovoltaicPower
 	}
 
-	// Convert weather to solar forecast at slotDuration resolution
 	forecastDuration := 36 * time.Hour
 	numSlots := int(forecastDuration / slotDuration)
 
 	solarForecast := make(map[int]float64)
 	weatherData := make(map[int]WeatherData)
 
+	// Try to get solar irradiance data from Open-Meteo
+	var solarDataPoints []openmeteo.SolarDataPoint
+	solarIrradiance, err := s.getOrFetchSolarForecast(config)
+	if err != nil {
+		s.logger.Printf("Warning: failed to fetch Open-Meteo solar forecast: %v, falling back to weather-based estimation", err)
+	} else {
+		solarDataPoints, err = solarIrradiance.DataPoints()
+		if err != nil {
+			s.logger.Printf("Warning: failed to parse Open-Meteo data points: %v, falling back to weather-based estimation", err)
+			solarDataPoints = nil
+		} else {
+			s.logger.Printf("Using Open-Meteo solar irradiance forecast with %d data points", len(solarDataPoints))
+		}
+	}
+
 	for i := range numSlots {
 		futureTime := now.Add(time.Duration(i) * slotDuration)
-		solarPower, cloudCoverage, weatherSymbol, airTemp := s.estimateSolarPowerFromWeather(weatherForecast, futureTime, config.MaxSolarPower, currentPVPower)
-		solarForecast[i] = solarPower
+
+		// Get weather metadata from MET Norway forecast
+		cloudCoverage, weatherSymbol, airTemp := s.getWeatherDataAtTime(weatherForecast, futureTime)
 		weatherData[i] = WeatherData{
 			CloudCoverage:  cloudCoverage,
 			WeatherSymbol:  weatherSymbol,
 			AirTemperature: airTemp,
 		}
+
+		// Estimate solar power from irradiance or fall back to weather-based estimation
+		if solarDataPoints != nil {
+			solarForecast[i] = irradianceAtTime(solarDataPoints, futureTime, config.MaxSolarPower)
+		} else {
+			solarPower, _, _, _ := s.estimateSolarPowerFromWeather(weatherForecast, futureTime, config.MaxSolarPower, currentPVPower)
+			solarForecast[i] = solarPower
+		}
 	}
+
+	// Override slot 0 with actual current PV power reading
 	solarForecast[0] = currentPVPower
 
 	return solarForecast, weatherData, nil
@@ -296,6 +324,113 @@ func (s *MinerScheduler) getOrFetchWeatherForecast(config *Config) (*meteo.METJS
 	s.weatherCache.Set(forecast)
 
 	return forecast, nil
+}
+
+// getOrFetchSolarForecast gets solar irradiance forecast from cache or fetches a new one from Open-Meteo.
+func (s *MinerScheduler) getOrFetchSolarForecast(config *Config) (*openmeteo.SolarForecast, error) {
+	// Try cache first
+	if forecast, ok := s.solarForecastCache.Get(); ok {
+		return forecast, nil
+	}
+
+	// Fetch new forecast from Open-Meteo
+	client := openmeteo.NewClient()
+
+	forecast, err := client.GetSolarForecast(openmeteo.QueryParams{
+		Location: openmeteo.Location{
+			Latitude:  config.Latitude,
+			Longitude: config.Longitude,
+		},
+		ForecastDays: 2,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch solar irradiance forecast: %w", err)
+	}
+
+	// Cache it
+	s.solarForecastCache.Set(forecast)
+
+	return forecast, nil
+}
+
+// getWeatherDataAtTime extracts cloud coverage, weather symbol, and air temperature
+// from the MET Norway forecast for a given time.
+func (s *MinerScheduler) getWeatherDataAtTime(forecast *meteo.METJSONForecast, targetTime time.Time) (cloudCoverage float64, weatherSymbol string, airTemperature float64) {
+	if forecast.Properties == nil || len(forecast.Properties.Timeseries) == 0 {
+		return 0, "", 0
+	}
+
+	var closestStep *meteo.ForecastTimeStep
+	minDiff := time.Duration(math.MaxInt64)
+
+	for _, step := range forecast.Properties.Timeseries {
+		diff := step.Time.Sub(targetTime)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < minDiff {
+			minDiff = diff
+			closestStep = &step
+		}
+	}
+
+	if closestStep == nil || closestStep.Data == nil || closestStep.Data.Instant == nil || closestStep.Data.Instant.Details == nil {
+		return 0, "", 0
+	}
+
+	details := closestStep.Data.Instant.Details
+
+	if details.CloudAreaFraction != nil {
+		cloudCoverage = *details.CloudAreaFraction
+	}
+	if symbol := closestStep.GetSymbolCode(); symbol != nil {
+		weatherSymbol = string(*symbol)
+	}
+	if details.AirTemperature != nil {
+		airTemperature = *details.AirTemperature
+	}
+
+	return cloudCoverage, weatherSymbol, airTemperature
+}
+
+// irradianceAtTime finds the closest solar irradiance data point to the target time
+// and converts the shortwave radiation (W/m²) to estimated solar power (kW).
+// Under STC (Standard Test Conditions), solar panels are rated at 1000 W/m², so:
+//
+//	power_kw = peakPower * (shortwave_radiation / 1000.0)
+func irradianceAtTime(dataPoints []openmeteo.SolarDataPoint, targetTime time.Time, peakPower float64) float64 {
+	if len(dataPoints) == 0 {
+		return 0
+	}
+
+	var closest *openmeteo.SolarDataPoint
+	minDiff := time.Duration(math.MaxInt64)
+
+	for i := range dataPoints {
+		diff := dataPoints[i].Time.Sub(targetTime)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < minDiff {
+			minDiff = diff
+			closest = &dataPoints[i]
+		}
+	}
+
+	if closest == nil {
+		return 0
+	}
+
+	// Convert GHI (Global Horizontal Irradiance) to solar power.
+	// STC reference irradiance is 1000 W/m².
+	power := peakPower * (closest.ShortwaveRadiation / 1000.0)
+	if power < 0 {
+		power = 0
+	}
+	if power > peakPower {
+		power = peakPower
+	}
+	return power
 }
 
 // estimateSolarPowerFromWeather estimates solar power output from weather data

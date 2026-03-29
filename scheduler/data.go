@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/devskill-org/ems/meteo"
+	"github.com/devskill-org/ems/openmeteo"
 	"github.com/devskill-org/ems/sigenergy"
 )
 
@@ -41,6 +42,39 @@ func (w *WeatherForecastCache) Set(forecast *meteo.METJSONForecast) {
 
 	w.forecast = forecast
 	w.fetchedAt = time.Now()
+}
+
+// SolarForecastCache caches Open-Meteo solar irradiance forecast data with expiration.
+type SolarForecastCache struct {
+	mu            sync.RWMutex
+	forecast      *openmeteo.SolarForecast
+	fetchedAt     time.Time
+	cacheDuration time.Duration
+}
+
+// Get retrieves the cached solar forecast if it's still valid.
+func (c *SolarForecastCache) Get() (*openmeteo.SolarForecast, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.forecast == nil {
+		return nil, false
+	}
+
+	if time.Since(c.fetchedAt) > c.cacheDuration {
+		return nil, false
+	}
+
+	return c.forecast, true
+}
+
+// Set updates the cached solar forecast with a new value.
+func (c *SolarForecastCache) Set(forecast *openmeteo.SolarForecast) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.forecast = forecast
+	c.fetchedAt = time.Now()
 }
 
 // DataSample represents a single measurement of power and battery data.
