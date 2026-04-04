@@ -669,12 +669,21 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 			}
 		} else {
 			// Mode 2: Self-use mode — charge from PV surplus only.
-			// The charge limit is the PV-sourced charge rate; the inverter will
-			// naturally use only the available PV surplus up to this limit.
+			// The charge limit is normally the MPC-planned PV-sourced charge rate.
+			// However, when the export price is non-positive (zero or negative),
+			// exporting any surplus PV to the grid is actively costly. In that case
+			// we raise the limit to BatteryMaxCharge so the inverter absorbs as much
+			// real-time PV surplus as possible rather than spilling it to the grid.
 			mode = 2
 			chargeLimit := decision.BatteryChargeFromPV
-			s.logger.Printf("Setting battery to CHARGE mode (PV only): ChargeFromPV: %.1f kW",
-				decision.BatteryChargeFromPV)
+			if decision.ExportPrice <= 0 {
+				chargeLimit = config.BatteryMaxCharge
+				s.logger.Printf("Setting battery to CHARGE mode (PV only, export price non-positive — limit raised to max): ChargeFromPV: %.1f kW -> MaxCharge: %.1f kW",
+					decision.BatteryChargeFromPV, chargeLimit)
+			} else {
+				s.logger.Printf("Setting battery to CHARGE mode (PV only): ChargeFromPV: %.1f kW",
+					decision.BatteryChargeFromPV)
+			}
 
 			// Set Remote EMS control mode
 			if err := client.SetRemoteEMSMode(mode); err != nil {
