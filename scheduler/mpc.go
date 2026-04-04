@@ -548,9 +548,9 @@ func (s *MinerScheduler) estimateSolarPowerFromWeather(forecast *meteo.METJSONFo
 // Standard → Eco) whose per-miner power consumption allows at least one miner to run
 // within the effective power limit (min(solarForecast, MinersPowerLimit)).  All miners
 // that fit at that mode are assumed to be running; the remainder are in standby.
-func (s *MinerScheduler) estimateLoadForecast(hourlyPrice float64, priceLimit float64, solarForecast float64, config *Config) float64 {
-	// Convert hourlyPrice from EUR/MWh to EUR/kWh for comparison with priceLimit
-	hourlyPricePerKWh := hourlyPrice / 1000.0
+func (s *MinerScheduler) estimateLoadForecast(spotPrice float64, priceLimit float64, solarForecast float64, config *Config) float64 {
+	// Convert spotPrice from EUR/MWh to EUR/kWh for comparison with priceLimit
+	spotPricePerKWh := spotPrice / 1000.0
 
 	// Get discovered miners
 	minersList := s.GetDiscoveredMiners()
@@ -562,13 +562,14 @@ func (s *MinerScheduler) estimateLoadForecast(hourlyPrice float64, priceLimit fl
 
 	// Miners are only ON if price is below or equal the limit
 	// Otherwise they consume standby power
-	if hourlyPricePerKWh > priceLimit {
+	if spotPricePerKWh > priceLimit {
 		// All miners are in standby mode
 		return float64(numMiners) * config.MinerPowerStandby
 	}
 
-	// Check if PV power control is enabled
-	if !config.UsePVPowerControl {
+	// Check if PV power control is enabled: active when price is at or above the configured threshold
+	pvControlEnabled := spotPrice >= config.PVPowerControlPriceLimit
+	if !pvControlEnabled {
 		// Without PV power control, miners can run but total power must not exceed
 		// the configured MinersPowerLimit.
 		totalMinerPower := float64(numMiners) * config.MinerPowerSuper

@@ -49,7 +49,7 @@ type Config struct {
 	MinerPowerEco      float64 `json:"miner_power_eco"`      // Power consumption in eco mode (kW)
 	MinerPowerStandard float64 `json:"miner_power_standard"` // Power consumption in standard mode (kW)
 	MinerPowerSuper    float64 `json:"miner_power_super"`    // Power consumption in super mode (kW)
-	UsePVPowerControl  bool    `json:"use_pv_power_control"` // Enable PV power-based control
+	PVPowerControlPriceLimit float64 `json:"pv_power_control_price_limit"` // EUR/MWh - enable PV power control when market price is at or above this threshold
 
 	// Plant Modbus server
 	PlantModbusAddress string `json:"plant_modbus_address"` // Plant Modbus server address (format: IP:PORT, e.g., "192.168.1.100:502")
@@ -132,7 +132,7 @@ func DefaultConfig() *Config {
 		MinerPowerEco:               0.8,   // 0.8 kW (800 W) in eco mode
 		MinerPowerStandard:          1.6,   // 1.6 kW (1600 W) in standard mode
 		MinerPowerSuper:             1.8,   // 1.8 kW (1800 W) in super mode
-		UsePVPowerControl:           false, // Disabled by default
+		PVPowerControlPriceLimit:    99999.0, // Very high default keeps PV power control off until explicitly configured
 		BatteryPreHeatPower:         0.7,   // 0.7 kW (700 W) battery preheating power
 		BatteryPreHeatTempThreshold: 10.0,  // 10°C - activate battery preheating below this temperature
 		BatteryThermalTimeConstant:  0.05,  // 0.05 - battery temperature moves 5% toward air temp per hour (auto-scaled for time slot duration)

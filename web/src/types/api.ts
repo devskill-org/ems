@@ -21,7 +21,7 @@ export interface EmsConfig {
   miner_power_eco: number;
   miner_power_standard: number;
   miner_power_super: number;
-  use_pv_power_control: boolean;
+  pv_power_control_price_limit: number;
   plant_modbus_address: string;
   device_id: number;
   pv_poll_interval: string;

@@ -38,7 +38,7 @@
   "miner_power_eco": 0.8,
   "miner_power_standard": 1.6,
   "miner_power_super": 1.8,
-  "use_pv_power_control": false,
+  "pv_power_control_price_limit": 100.0,
   "latitude": 56.9496,
   "longitude": 24.1052,
   "weather_update_interval": "1h",

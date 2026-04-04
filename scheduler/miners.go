@@ -138,6 +138,17 @@ func (s *MinerScheduler) getEffecivePowerLimit(ctx context.Context) float64 {
 	return effectiveLimit
 }
 
+// isPVPowerControlActive returns true when PV power control should be active for the current market price.
+// It returns false if the current price is below PVPowerControlPriceLimit or if the current price cannot be retrieved.
+func (s *MinerScheduler) isPVPowerControlActive(ctx context.Context) bool {
+	price, err := s.getCurrentPrice(ctx)
+	if err != nil {
+		s.logger.Printf("PV power control: failed to get current price, defaulting to disabled: %v", err)
+		return false
+	}
+	return price >= s.config.PVPowerControlPriceLimit
+}
+
 // manageMiners manages miner states based on current price vs price limit and power consumption
 func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64) error {
 	priceLimit := s.config.PriceLimit
@@ -153,8 +164,8 @@ func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64)
 		s.logger.Printf("DRY-RUN MODE: Actions will be simulated only")
 	}
 
-	// Check if PV power control is enabled
-	usePowerControl := s.config.UsePVPowerControl
+	// Check if PV power control is enabled: active when price is at or above the configured threshold
+	usePowerControl := currentPrice >= s.config.PVPowerControlPriceLimit
 
 	// Always enforce MinersPowerLimit; when PV power control is enabled the effective
 	// limit may be further reduced to the available PV power.
@@ -325,8 +336,8 @@ func (s *MinerScheduler) runStateCheck(ctx context.Context) error {
 
 	isDryRun := s.config.DryRun
 
-	// Check if PV power control is enabled
-	usePowerControl := s.config.UsePVPowerControl
+	// Check if PV power control is enabled based on current market price
+	usePowerControl := s.isPVPowerControlActive(ctx)
 	effectiveLimit := s.config.MinersPowerLimit
 	totalPower := s.calculateTotalPowerConsumption(minersList)
 

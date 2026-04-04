@@ -55,7 +55,7 @@ func baseConfig() *Config {
 		MinerPowerStandard: 1.5,
 		MinerPowerSuper:    2.0,
 		MinersPowerLimit:   20.0, // large enough not to be a bottleneck unless tested
-		UsePVPowerControl:  false,
+		PVPowerControlPriceLimit: 999.0,
 	}
 }
 
@@ -79,7 +79,7 @@ func TestEstimateLoadForecast_NoMiners(t *testing.T) {
 
 func TestEstimateLoadForecast_PriceAboveLimit_PowerControlOff(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = false
+	cfg.PVPowerControlPriceLimit = 999.0
 	s := newMPCTestScheduler(cfg, 3)
 
 	// price = 200 EUR/MWh → 0.2 EUR/kWh > priceLimit 0.1 EUR/kWh
@@ -92,7 +92,7 @@ func TestEstimateLoadForecast_PriceAboveLimit_PowerControlOff(t *testing.T) {
 
 func TestEstimateLoadForecast_PriceAboveLimit_PowerControlOn(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	s := newMPCTestScheduler(cfg, 4)
 
 	got := s.estimateLoadForecast(200.0, 0.1, 100.0, cfg)
@@ -104,7 +104,7 @@ func TestEstimateLoadForecast_PriceAboveLimit_PowerControlOn(t *testing.T) {
 
 func TestEstimateLoadForecast_PriceExactlyAtLimit_RunsMiners(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = false
+	cfg.PVPowerControlPriceLimit = 999.0
 	s := newMPCTestScheduler(cfg, 2)
 
 	// price = 100 EUR/MWh → 0.1 EUR/kWh == priceLimit → should run
@@ -122,7 +122,7 @@ func TestEstimateLoadForecast_PriceExactlyAtLimit_RunsMiners(t *testing.T) {
 
 func TestEstimateLoadForecast_NoPowerControl_AllMinersBelowLimit(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = false
+	cfg.PVPowerControlPriceLimit = 999.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 3)
 
@@ -136,7 +136,7 @@ func TestEstimateLoadForecast_NoPowerControl_AllMinersBelowLimit(t *testing.T) {
 
 func TestEstimateLoadForecast_NoPowerControl_CappedByMinersPowerLimit(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = false
+	cfg.PVPowerControlPriceLimit = 999.0
 	cfg.MinersPowerLimit = 5.0
 	s := newMPCTestScheduler(cfg, 5)
 
@@ -150,7 +150,7 @@ func TestEstimateLoadForecast_NoPowerControl_CappedByMinersPowerLimit(t *testing
 
 func TestEstimateLoadForecast_NoPowerControl_SolarIgnored(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = false
+	cfg.PVPowerControlPriceLimit = 999.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 2)
 
@@ -170,7 +170,7 @@ func TestEstimateLoadForecast_NoPowerControl_SolarIgnored(t *testing.T) {
 // function picks Super mode when the solar forecast is large enough.
 func TestEstimateLoadForecast_PowerControl_SuperModeSelected(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 3)
 
@@ -188,7 +188,7 @@ func TestEstimateLoadForecast_PowerControl_SuperModeSelected(t *testing.T) {
 // function uses Standard mode for miners that fit and standby for the rest.
 func TestEstimateLoadForecast_PowerControl_SuperModeFallsBackToStandard(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	// 4 miners, solar = 3.5 kW
 	// Super  (2.0): 3.5 / 2.0 = 1  → 1 miner fits at Super  (try Super first, 1 > 0 → CHOSEN)
@@ -207,7 +207,7 @@ func TestEstimateLoadForecast_PowerControl_SuperModeFallsBackToStandard(t *testi
 // Standard, and assigns as many miners as possible at Standard.
 func TestEstimateLoadForecast_PowerControl_FallsBackToStandardMode(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	// Solar = 1.8 kW
 	// Super  (2.0): 1.8 / 2.0 = 0 → skip
@@ -226,7 +226,7 @@ func TestEstimateLoadForecast_PowerControl_FallsBackToStandardMode(t *testing.T)
 // solar is too low for Super and Standard, Eco mode is tried.
 func TestEstimateLoadForecast_PowerControl_FallsBackToEcoMode(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	// Solar = 1.2 kW
 	// Super    (2.0): 1.2 / 2.0 = 0 → skip
@@ -246,7 +246,7 @@ func TestEstimateLoadForecast_PowerControl_FallsBackToEcoMode(t *testing.T) {
 // too low even for Eco mode, all miners remain in standby.
 func TestEstimateLoadForecast_PowerControl_NoModesFit(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	// Solar = 0.5 kW < Eco (1.0) → no mode fits → all standby
 	s := newMPCTestScheduler(cfg, 3)
@@ -262,7 +262,7 @@ func TestEstimateLoadForecast_PowerControl_NoModesFit(t *testing.T) {
 // solar puts all miners in standby.
 func TestEstimateLoadForecast_PowerControl_ZeroSolarAllStandby(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 2)
 
@@ -281,7 +281,7 @@ func TestEstimateLoadForecast_PowerControl_ZeroSolarAllStandby(t *testing.T) {
 // MinersPowerLimit caps the effective limit even when solar is higher.
 func TestEstimateLoadForecast_PowerControl_LimitedByMinersPowerLimit(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 3.0 // only 1 Super-mode miner fits (2.0 kW)
 	s := newMPCTestScheduler(cfg, 4)
 
@@ -299,7 +299,7 @@ func TestEstimateLoadForecast_PowerControl_LimitedByMinersPowerLimit(t *testing.
 // caps the effective limit when it is less than MinersPowerLimit.
 func TestEstimateLoadForecast_PowerControl_SolarLowerThanLimit(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 5)
 
@@ -318,7 +318,7 @@ func TestEstimateLoadForecast_PowerControl_SolarLowerThanLimit(t *testing.T) {
 
 func TestEstimateLoadForecast_PowerControl_AllMinersRunAtSuper(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	// 3 miners at Super = 6.0, solar = 8.0 → all fit
 	s := newMPCTestScheduler(cfg, 3)
@@ -338,7 +338,7 @@ func TestEstimateLoadForecast_PowerControl_AllMinersRunAtSuper(t *testing.T) {
 // with only one miner.
 func TestEstimateLoadForecast_PowerControl_SingleMiner(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 1)
 
@@ -370,7 +370,7 @@ func TestEstimateLoadForecast_PowerControl_SingleMiner(t *testing.T) {
 // because not all miners can run.
 func TestEstimateLoadForecast_PowerControl_PartialSuperUsed(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	// solar = 5.0 kW
 	// Super (2.0): 5.0 / 2.0 = 2 → 2 miners at Super, 2 standby  → CHOSEN
@@ -388,7 +388,7 @@ func TestEstimateLoadForecast_PowerControl_PartialSuperUsed(t *testing.T) {
 // to run at Super mode.
 func TestEstimateLoadForecast_PowerControl_ExactlyOneSuperMinerFits(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 3)
 
@@ -405,7 +405,7 @@ func TestEstimateLoadForecast_PowerControl_ExactlyOneSuperMinerFits(t *testing.T
 // Standard mode.
 func TestEstimateLoadForecast_PowerControl_JustBelowSuperMode(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 2)
 
@@ -423,7 +423,7 @@ func TestEstimateLoadForecast_PowerControl_JustBelowSuperMode(t *testing.T) {
 // control is off.
 func TestEstimateLoadForecast_NoPowerControl_SingleMiner(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = false
+	cfg.PVPowerControlPriceLimit = 999.0
 	cfg.MinersPowerLimit = 5.0
 	s := newMPCTestScheduler(cfg, 1)
 
@@ -438,7 +438,7 @@ func TestEstimateLoadForecast_NoPowerControl_SingleMiner(t *testing.T) {
 // active and standby modes (price strictly greater than limit → standby).
 func TestEstimateLoadForecast_PriceJustAboveLimit(t *testing.T) {
 	cfg := baseConfig()
-	cfg.UsePVPowerControl = true
+	cfg.PVPowerControlPriceLimit = 10.0
 	cfg.MinersPowerLimit = 20.0
 	s := newMPCTestScheduler(cfg, 3)
 
@@ -462,7 +462,7 @@ func TestEstimateLoadForecast_TableDriven(t *testing.T) {
 		MinerPowerStandard: 1.5,
 		MinerPowerSuper:    2.0,
 		MinersPowerLimit:   20.0,
-		UsePVPowerControl:  true,
+		PVPowerControlPriceLimit: 10.0,
 	}
 
 	tests := []struct {

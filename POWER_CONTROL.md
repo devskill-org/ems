@@ -29,15 +29,15 @@ These values should be adjusted based on your specific device hardware specifica
 
 ### Feature Toggle
 
-- **`use_pv_power_control`** (bool): Enable/disable PV power-based control. Default: `false`
-  - When `true`: The EMS will actively manage loads based on available PV power
-  - When `false`: The EMS uses only price-based control (legacy behavior)
+- **`pv_power_control_price_limit`** (float64, EUR/MWh): Price threshold for PV power-based control. Default: `99999.0`
+  - The EMS activates PV power control when the market price is at or above this threshold
+  - Set to a high value (e.g. `99999.0`) to keep PV power control off in practice
 
 ## How It Works
 
 ### Power-Based Control Logic
 
-When `use_pv_power_control` is enabled, the EMS implements the following logic:
+When `pv_power_control_price_limit` is set to a positive value and the market price meets or exceeds the threshold, the EMS implements the following logic:
 
 1. **Effective Power Limit Calculation**
    - The effective limit is the minimum of:
@@ -98,7 +98,7 @@ This function now:
 
 ```json
 {
-  "use_pv_power_control": true,
+  "pv_power_control_price_limit": 80.0,
   "miners_power_limit": 30.0,
   "miner_power_standby": 0.05,
   "miner_power_eco": 0.8,
@@ -157,7 +157,7 @@ To disable power control and revert to price-only based control:
 
 ```json
 {
-  "use_pv_power_control": false
+  "pv_power_control_price_limit": 0
 }
 ```
 

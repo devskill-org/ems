@@ -223,7 +223,7 @@ Create a `config.json` file for system configuration:
   "miner_power_eco": 0.8,
   "miner_power_standard": 1.6,
   "miner_power_super": 1.8,
-  "use_pv_power_control": true,
+  "pv_power_control_price_limit": 100.0,
   "latitude": 56.9496,
   "longitude": 24.1052,
   "weather_update_interval": "1h",
@@ -285,7 +285,7 @@ Create a `config.json` file for system configuration:
 | `miners_state_check_interval` | 1m | Device state monitoring frequency |
 | `miner_timeout` | 5s | Timeout for device operations |
 | `miners_power_limit` | 30.0 | Maximum total power for controllable loads (kW) |
-| `use_pv_power_control` | false | Enable PV-based power limiting |
+| `pv_power_control_price_limit` | 99999.0 | EUR/MWh price threshold at or above which PV-based power limiting is enabled |
 | `fanr_high_threshold` | 70 | Fan speed % triggering power reduction |
 | `fanr_low_threshold` | 50 | Fan speed % allowing power increase |
 
