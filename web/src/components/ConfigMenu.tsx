@@ -206,17 +206,17 @@ const SECTIONS: Section[] = [
         step: 0.01,
         unit: "kW",
       },
-    ],
-  },
-  {
-    title: "PV / Modbus",
-    fields: [
       {
         key: "use_pv_power_control",
         label: "Use PV Power Control",
         type: "boolean",
         hint: "Enable solar-power-based miner control",
       },
+    ],
+  },
+  {
+    title: "PV / Modbus",
+    fields: [
       {
         key: "plant_modbus_address",
         label: "Plant Modbus Address",
