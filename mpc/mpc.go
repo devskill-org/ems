@@ -311,6 +311,31 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 		}
 	}
 
+	// Add a precise top-up action that charges exactly to BatteryMaxSOC.
+	// The discrete steps above (multiples of BatteryMaxCharge/granularity) may be
+	// too coarse to bridge the final gap to 100% — e.g. the smallest step can
+	// overshoot, leaving the battery stranded at ~99.8%.  This dedicated option
+	// guarantees the optimizer always has a path to exactly BatteryMaxSOC so that
+	// cell balancing (which only starts at 100%) can activate.
+	{
+		timeSlotDuration := mpc.Config.TimeSlotDuration
+		if timeSlotDuration == 0 {
+			timeSlotDuration = 1.0
+		}
+		socGap := mpc.Config.BatteryMaxSOC - currentSOC
+		if socGap > 1e-9 {
+			// Invert calculateNewSOC: charge needed so that
+			//   currentSOC + charge * duration * efficiency / capacity == BatteryMaxSOC
+			topUpCharge := socGap * mpc.Config.BatteryCapacity / (mpc.Config.BatteryEfficiency * timeSlotDuration)
+			if topUpCharge > 0 && topUpCharge <= mpc.Config.BatteryMaxCharge {
+				batteryActions = append(batteryActions, struct {
+					charge    float64
+					discharge float64
+				}{topUpCharge, 0})
+			}
+		}
+	}
+
 	// Discharge options - use finer granularity for better optimization
 	for i := granularity; i > 0; i-- {
 		discharge := float64(i) * mpc.Config.BatteryMaxDischarge / float64(granularity)
@@ -457,8 +482,12 @@ func (mpc *Controller) canCharge(soc, charge float64) bool {
 		timeSlotDuration = 1.0
 	}
 
-	// Convert power (kW) to energy (kWh) by multiplying by time slot duration
-	chargeEnergy := charge * timeSlotDuration
+	// Convert power (kW) to energy (kWh) using the same formula as calculateNewSOC:
+	// multiply by time slot duration AND efficiency so that both functions agree on
+	// how much the SOC actually rises.  Without the efficiency factor canCharge
+	// overestimates the SOC increase and rejects charge actions that would stay
+	// within BatteryMaxSOC, preventing the battery from ever reaching 100%.
+	chargeEnergy := charge * timeSlotDuration * mpc.Config.BatteryEfficiency
 	newSOC := soc + (chargeEnergy / mpc.Config.BatteryCapacity)
 	return newSOC <= mpc.Config.BatteryMaxSOC
 }
