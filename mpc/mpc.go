@@ -159,8 +159,13 @@ func (mpc *Controller) optimizeWithForecast(forecast []TimeSlot, includeSolar bo
 		}
 	}
 
-	// Initialize with current SOC and battery temperature
-	startSOCIndex := mpc.socToIndex(mpc.CurrentSOC, socStep)
+	// Initialize with current SOC and battery temperature.
+	// Clamp to the configured SOC range so that a real battery reading that
+	// sits slightly outside [BatteryMinSOC, BatteryMaxSOC] (e.g. due to
+	// inverter rounding or a recent limit change) does not produce a negative
+	// index and cause a panic.
+	clampedSOC := math.Max(mpc.Config.BatteryMinSOC, math.Min(mpc.Config.BatteryMaxSOC, mpc.CurrentSOC))
+	startSOCIndex := mpc.socToIndex(clampedSOC, socStep)
 	dp[0][startSOCIndex].profit = 0
 	dp[0][startSOCIndex].batteryTemp = mpc.CurrentBatteryTemp
 
