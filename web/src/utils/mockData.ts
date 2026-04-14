@@ -166,10 +166,10 @@ function generateMPCDecisions(): MPCDecisionInfo[] {
   const decisions: MPCDecisionInfo[] = [];
   const currentTime = new Date();
   const currentMinute = currentTime.getMinutes();
-  
+
   // Simulate battery temperature (typically 20-30°C for normal operation)
   const baseBatteryTemp = 22 + Math.random() * 6; // 22-28°C range
-  
+
   // Simulate base air temperature (varies by time of day)
   const baseAirTemp = 10 + Math.random() * 5; // 10-15°C base range
 
@@ -218,6 +218,20 @@ function generateMPCDecisions(): MPCDecisionInfo[] {
       );
     }
 
+    // Split battery charge into PV and grid portions
+    const pvSurplus = Math.max(0, solarForecast - loadForecast);
+    const batteryChargeFromPV = Math.min(pvSurplus, batteryCharge);
+
+    // Simulate grid-only profitable charging (cheap price periods independent of solar)
+    let batteryChargeFromGrid = 0;
+    if (importPrice < 0.25 && currentSOC < 0.85) {
+      // Very cheap grid hours - aggressively charge from grid
+      batteryChargeFromGrid = Math.random() * 2 + 1; // 1-3 kW
+    } else if (importPrice < 0.35 && currentSOC < 0.75) {
+      // Moderately cheap - some grid charging
+      batteryChargeFromGrid = Math.random() * 1 + 0.5; // 0.5-1.5 kW
+    }
+
     // Grid strategy - only import OR export, never both
     let gridImport = 0;
     let gridExport = 0;
@@ -234,12 +248,27 @@ function generateMPCDecisions(): MPCDecisionInfo[] {
       gridImport = Math.abs(netPower) + Math.random() * 10; // Cover deficit + some margin
     }
 
+    // Account for grid charging draw (mirrors the backend Optimize() fix):
+    // absorb into reduced export first, then raise import for any remainder
+    if (batteryChargeFromGrid > 0) {
+      const batteryEfficiency = 0.95;
+      const additionalGridDraw = batteryChargeFromGrid / batteryEfficiency;
+      if (gridExport >= additionalGridDraw) {
+        gridExport -= additionalGridDraw;
+      } else {
+        gridImport += additionalGridDraw - gridExport;
+        gridExport = 0;
+      }
+    }
+
     const profit = (gridExport * exportPrice - gridImport * importPrice) / 4000; // Divided by 4 for 15-min interval
 
     decisions.push({
       hour: hour + minute / 60, // Fractional hour (e.g., 10.25 for 10:15)
       timestamp,
       battery_charge: batteryCharge,
+      battery_charge_from_pv: batteryChargeFromPV,
+      battery_charge_from_grid: batteryChargeFromGrid,
       battery_discharge: batteryDischarge,
       grid_import: gridImport,
       grid_export: gridExport,
@@ -252,7 +281,8 @@ function generateMPCDecisions(): MPCDecisionInfo[] {
       cloud_coverage: cloudCoverage,
       weather_symbol: getWeatherSymbol(hour),
       battery_avg_cell_temp: baseBatteryTemp + (Math.random() * 2 - 1), // Small variation around base temp
-      air_temperature: baseAirTemp + (hour - 12) * 0.5 + (Math.random() * 2 - 1), // Warmer in afternoon, cooler at night
+      air_temperature:
+        baseAirTemp + (hour - 12) * 0.5 + (Math.random() * 2 - 1), // Warmer in afternoon, cooler at night
     });
   }
 

@@ -149,6 +149,9 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
   const getGridAction = useCallback((decision: MPCDecisionInfo) => {
     if (decision.grid_import > 0.1) {
       return { action: "import", power: decision.grid_import };
+    } else if ((decision.battery_charge_from_grid ?? 0) > 0.1) {
+      // Grid is used to charge the battery even when net grid_import rounds to ~0
+      return { action: "import", power: decision.battery_charge_from_grid };
     } else if (decision.grid_export > 0.1) {
       return { action: "export", power: decision.grid_export };
     }
@@ -899,15 +902,20 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                       .padStart(2, "0");
 
                     // Check if this is the start of a new hour
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <th
                         key={decision.timestamp}
                         style={{
                           fontSize: "0.8em",
-                          borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined,
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
                         }}
                       >
                         {minute}
@@ -922,13 +930,20 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                   {decisions.map((decision, index) => {
                     const batteryAction = getBatteryAction(decision);
                     const date = new Date(decision.timestamp * 1000);
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <td
                         key={decision.timestamp}
-                        style={{ borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined }}
+                        style={{
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
+                        }}
                       >
                         <span className={getActionClass(batteryAction.action)}>
                           {batteryAction.power > 0
@@ -944,13 +959,20 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                   {decisions.map((decision, index) => {
                     const gridAction = getGridAction(decision);
                     const date = new Date(decision.timestamp * 1000);
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <td
                         key={decision.timestamp}
-                        style={{ borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined }}
+                        style={{
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
+                        }}
                       >
                         <span className={getActionClass(gridAction.action)}>
                           {gridAction.power > 0
@@ -965,13 +987,20 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                   <th>SOC (%)</th>
                   {decisions.map((decision, index) => {
                     const date = new Date(decision.timestamp * 1000);
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <td
                         key={decision.timestamp}
-                        style={{ borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined }}
+                        style={{
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
+                        }}
                       >
                         {(decision.battery_soc * 100).toFixed(1)}
                       </td>
@@ -983,13 +1012,20 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                   <th>Solar (kW)</th>
                   {decisions.map((decision, index) => {
                     const date = new Date(decision.timestamp * 1000);
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <td
                         key={decision.timestamp}
-                        style={{ borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined }}
+                        style={{
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
+                        }}
                       >
                         {decision.solar_forecast.toFixed(1)}
                       </td>
@@ -1000,13 +1036,20 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                   <th>Load (kW)</th>
                   {decisions.map((decision, index) => {
                     const date = new Date(decision.timestamp * 1000);
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <td
                         key={decision.timestamp}
-                        style={{ borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined }}
+                        style={{
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
+                        }}
                       >
                         {decision.load_forecast.toFixed(1)}
                       </td>
@@ -1041,18 +1084,20 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                       }
                     });
 
-                    return hourGroups.map(({ groupKey, count, cloudCoverage }) => (
-                      <td
-                        key={groupKey}
-                        colSpan={count}
-                        style={{
-                          textAlign: "center",
-                          borderLeft: "2px solid var(--color-border)",
-                        }}
-                      >
-                        {cloudCoverage.toFixed(0)}
-                      </td>
-                    ));
+                    return hourGroups.map(
+                      ({ groupKey, count, cloudCoverage }) => (
+                        <td
+                          key={groupKey}
+                          colSpan={count}
+                          style={{
+                            textAlign: "center",
+                            borderLeft: "2px solid var(--color-border)",
+                          }}
+                        >
+                          {cloudCoverage.toFixed(0)}
+                        </td>
+                      ),
+                    );
                   })()}
                 </tr>
                 <tr>
@@ -1083,19 +1128,21 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                       }
                     });
 
-                    return hourGroups.map(({ groupKey, count, weatherSymbol }) => (
-                      <td
-                        key={groupKey}
-                        colSpan={count}
-                        title={weatherSymbol || "Unknown"}
-                        style={{
-                          textAlign: "center",
-                          borderLeft: "2px solid var(--color-border)",
-                        }}
-                      >
-                        {getWeatherIcon(weatherSymbol)}
-                      </td>
-                    ));
+                    return hourGroups.map(
+                      ({ groupKey, count, weatherSymbol }) => (
+                        <td
+                          key={groupKey}
+                          colSpan={count}
+                          title={weatherSymbol || "Unknown"}
+                          style={{
+                            textAlign: "center",
+                            borderLeft: "2px solid var(--color-border)",
+                          }}
+                        >
+                          {getWeatherIcon(weatherSymbol)}
+                        </td>
+                      ),
+                    );
                   })()}
                 </tr>
                 <tr>
@@ -1126,31 +1173,40 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                       }
                     });
 
-                    return hourGroups.map(({ groupKey, count, airTemperature }) => (
-                      <td
-                        key={groupKey}
-                        colSpan={count}
-                        style={{
-                          textAlign: "center",
-                          borderLeft: "2px solid var(--color-border)",
-                        }}
-                      >
-                        {airTemperature.toFixed(1)}
-                      </td>
-                    ));
+                    return hourGroups.map(
+                      ({ groupKey, count, airTemperature }) => (
+                        <td
+                          key={groupKey}
+                          colSpan={count}
+                          style={{
+                            textAlign: "center",
+                            borderLeft: "2px solid var(--color-border)",
+                          }}
+                        >
+                          {airTemperature.toFixed(1)}
+                        </td>
+                      ),
+                    );
                   })()}
                 </tr>
                 <tr>
                   <th>Avg Cell Temp (°C)</th>
                   {decisions.map((decision, index) => {
                     const date = new Date(decision.timestamp * 1000);
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <td
                         key={decision.timestamp}
-                        style={{ borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined }}
+                        style={{
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
+                        }}
                       >
                         {decision.battery_avg_cell_temp?.toFixed(1) || "-"}
                       </td>
@@ -1161,17 +1217,26 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
                   <th>Profit (€)</th>
                   {decisions.map((decision, index) => {
                     const date = new Date(decision.timestamp * 1000);
-                    const isHourStart = index === 0 ||
-                      new Date(decisions[index - 1].timestamp * 1000).getHours() !== date.getHours();
+                    const isHourStart =
+                      index === 0 ||
+                      new Date(
+                        decisions[index - 1].timestamp * 1000,
+                      ).getHours() !== date.getHours();
 
                     return (
                       <td
                         key={decision.timestamp}
-                        style={{ borderLeft: isHourStart ? "2px solid var(--color-border)" : undefined }}
+                        style={{
+                          borderLeft: isHourStart
+                            ? "2px solid var(--color-border)"
+                            : undefined,
+                        }}
                       >
                         <span
                           className={
-                            decision.profit >= 0 ? "value-success" : "value-error"
+                            decision.profit >= 0
+                              ? "value-success"
+                              : "value-error"
                           }
                         >
                           {Math.abs(decision.profit).toFixed(2)}
