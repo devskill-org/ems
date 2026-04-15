@@ -616,6 +616,69 @@ func (s *MinerScheduler) estimateLoadForecast(spotPrice float64, priceLimit floa
 	return float64(numMiners) * config.MinerPowerStandby
 }
 
+// batteryAction holds the Modbus control parameters derived from an MPC decision.
+type batteryAction struct {
+	mode           uint16
+	chargeLimit    float64
+	dischargeLimit float64
+	setCharge      bool
+	setDischarge   bool
+	logMsg         string
+}
+
+// decideBatteryAction translates an MPC control decision into a concrete battery
+// action without any side-effects, making the mapping easy to read and test.
+func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64) batteryAction {
+	switch {
+	case decision.BatteryChargeFromGrid > 0.01:
+		// Mode 4: Command charging (PV first, then grid).
+		// The charge limit must be the total desired charge rate so that the
+		// inverter can draw from both PV surplus and the grid to reach it.
+		// Clamp to maxCharge: the inverter rejects any value above the
+		// hardware-rated maximum with a Modbus illegal-data-address exception.
+		limit := math.Min(decision.BatteryChargeFromPV+decision.BatteryChargeFromGrid, maxCharge)
+		return batteryAction{
+			mode:        4,
+			chargeLimit: limit,
+			setCharge:   true,
+			logMsg: fmt.Sprintf("Setting battery to CHARGE mode (PV + Grid): ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW, TotalLimit: %.1f kW",
+				decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, limit),
+		}
+
+	case decision.BatteryChargeFromPV > 0.01:
+		// Mode 2: Self-use mode — charge from PV surplus only.
+		// When the export price is non-positive raise the limit to maxCharge so
+		// the inverter absorbs PV surplus instead of spilling it to the grid.
+		limit := decision.BatteryChargeFromPV
+		msg := fmt.Sprintf("Setting battery to CHARGE mode (PV only): ChargeFromPV: %.1f kW", limit)
+		if decision.ExportPrice <= 0 {
+			limit = maxCharge
+			msg = fmt.Sprintf("Setting battery to CHARGE mode (PV only, export price non-positive — limit raised to max): ChargeFromPV: %.1f kW -> MaxCharge: %.1f kW",
+				decision.BatteryChargeFromPV, maxCharge)
+		}
+		return batteryAction{mode: 2, chargeLimit: limit, setCharge: true, logMsg: msg}
+
+	case decision.BatteryDischarge > 0.01:
+		// Mode 5: Command discharging (PV first).
+		return batteryAction{
+			mode:           5,
+			dischargeLimit: decision.BatteryDischarge,
+			setDischarge:   true,
+			logMsg:         fmt.Sprintf("Setting battery to DISCHARGE mode: %.1f kW", decision.BatteryDischarge),
+		}
+
+	default:
+		// Mode 4: Idle — zero charge and discharge limits keep the battery passive.
+		return batteryAction{
+			mode:         4,
+			setCharge:    true,
+			setDischarge: true,
+			logMsg: fmt.Sprintf("Setting battery to IDLE mode (minimal limits): GridImport: %.1f kW, GridExport: %.1f kW",
+				decision.GridImport, decision.GridExport),
+		}
+	}
+}
+
 // executeMPCDecision executes the first MPC control decision
 func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.ControlDecision, dryRun bool) error {
 	if dryRun {
@@ -639,106 +702,25 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	}
 	s.logger.Printf("Enabled Remote EMS control")
 
-	// Determine control mode based on decision
-	var mode uint16
+	action := decideBatteryAction(decision, config.BatteryMaxCharge)
+	s.logger.Print(action.logMsg)
 
-	if decision.BatteryChargeFromPV > 0.01 || decision.BatteryChargeFromGrid > 0.01 {
-		// Battery should charge.
-		// Decide mode based on whether grid charging is also needed.
-		if decision.BatteryChargeFromGrid > 0.01 {
-			// Mode 4: Command charging (PV first, then grid).
-			// The charge limit must be the total desired charge rate so that the
-			// inverter can draw from both PV surplus and the grid to reach it.
-			// Clamp to BatteryMaxCharge: the inverter rejects any value above the
-			// hardware-rated maximum with a Modbus illegal-data-address exception.
-			mode = 4
-			chargeLimit := math.Min(
-				decision.BatteryChargeFromPV+decision.BatteryChargeFromGrid,
-				config.BatteryMaxCharge,
-			)
-			s.logger.Printf("Setting battery to CHARGE mode (PV + Grid): ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW, TotalLimit: %.1f kW",
-				decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, chargeLimit)
-
-			// Set Remote EMS control mode
-			if err := client.SetRemoteEMSMode(mode); err != nil {
-				return fmt.Errorf("failed to set remote EMS mode: %w", err)
-			}
-
-			// Set ESS max charging limit to the combined PV + grid charge rate
-			if err := client.SetESSMaxChargingLimit(chargeLimit); err != nil {
-				return fmt.Errorf("failed to set ESS charging limit: %w", err)
-			}
-		} else {
-			// Mode 2: Self-use mode — charge from PV surplus only.
-			// The charge limit is normally the MPC-planned PV-sourced charge rate.
-			// However, when the export price is non-positive (zero or negative),
-			// exporting any surplus PV to the grid is actively costly. In that case
-			// we raise the limit to BatteryMaxCharge so the inverter absorbs as much
-			// real-time PV surplus as possible rather than spilling it to the grid.
-			mode = 2
-			chargeLimit := decision.BatteryChargeFromPV
-			if decision.ExportPrice <= 0 {
-				chargeLimit = config.BatteryMaxCharge
-				s.logger.Printf("Setting battery to CHARGE mode (PV only, export price non-positive — limit raised to max): ChargeFromPV: %.1f kW -> MaxCharge: %.1f kW",
-					decision.BatteryChargeFromPV, chargeLimit)
-			} else {
-				s.logger.Printf("Setting battery to CHARGE mode (PV only): ChargeFromPV: %.1f kW",
-					decision.BatteryChargeFromPV)
-			}
-
-			// Set Remote EMS control mode
-			if err := client.SetRemoteEMSMode(mode); err != nil {
-				return fmt.Errorf("failed to set remote EMS mode: %w", err)
-			}
-
-			// Set ESS max charging limit to the PV-only charge rate
-			if err := client.SetESSMaxChargingLimit(chargeLimit); err != nil {
-				return fmt.Errorf("failed to set ESS charging limit: %w", err)
-			}
-		}
-
-	} else if decision.BatteryDischarge > 0.01 {
-		// Battery should discharge
-		// Mode 5: Command discharging (PV first) - discharge from PV first
-		mode = 5
-		dischargeLimit := decision.BatteryDischarge
-		s.logger.Printf("Setting battery to DISCHARGE mode: %.1f kW", dischargeLimit)
-
-		// Set Remote EMS control mode
-		if err := client.SetRemoteEMSMode(mode); err != nil {
-			return fmt.Errorf("failed to set remote EMS mode: %w", err)
-		}
-
-		// Set ESS max discharging limit
-		if err := client.SetESSMaxDischargingLimit(dischargeLimit); err != nil {
-			return fmt.Errorf("failed to set ESS discharging limit: %w", err)
-		}
-
-	} else {
-		// Battery should stay idle - MPC wants to maintain SOC and use grid import/export
-		// Set minimal charge/discharge limits to prevent battery participation
-		// Use mode 4 (command charging) with minimal limits to keep battery idle
-		mode = 4
-		minimalLimit := 0.0 // Zero limit to keep battery completely idle
-		s.logger.Printf("Setting battery to IDLE mode (minimal limits): GridImport: %.1f kW, GridExport: %.1f kW",
-			decision.GridImport, decision.GridExport)
-
-		// Set Remote EMS control mode
-		if err := client.SetRemoteEMSMode(mode); err != nil {
-			return fmt.Errorf("failed to set remote EMS mode: %w", err)
-		}
-
-		// Set minimal charging and discharging limits to effectively disable battery use
-		if err := client.SetESSMaxChargingLimit(minimalLimit); err != nil {
+	if err := client.SetRemoteEMSMode(action.mode); err != nil {
+		return fmt.Errorf("failed to set remote EMS mode: %w", err)
+	}
+	if action.setCharge {
+		if err := client.SetESSMaxChargingLimit(action.chargeLimit); err != nil {
 			return fmt.Errorf("failed to set ESS charging limit: %w", err)
 		}
-		if err := client.SetESSMaxDischargingLimit(minimalLimit); err != nil {
+	}
+	if action.setDischarge {
+		if err := client.SetESSMaxDischargingLimit(action.dischargeLimit); err != nil {
 			return fmt.Errorf("failed to set ESS discharging limit: %w", err)
 		}
 	}
 
 	s.logger.Printf("Successfully executed MPC decision - Mode: %d, SOC: %.1f%%, ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW, Discharge: %.1f kW, GridImport: %.1f kW, GridExport: %.1f kW",
-		mode, decision.BatterySOC*100, decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, decision.BatteryDischarge, decision.GridImport, decision.GridExport)
+		action.mode, decision.BatterySOC*100, decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, decision.BatteryDischarge, decision.GridImport, decision.GridExport)
 
 	return nil
 }
