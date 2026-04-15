@@ -696,6 +696,19 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	}
 	defer client.Close()
 
+	// Check whether an EV is plugged into the DC charger. When it is, the
+	// inverter is already managing power delivery for the fast-charge session
+	// and we must not override its control mode or limits.
+	plantInfo, err := client.ReadPlantRunningInfo()
+	if err != nil {
+		return fmt.Errorf("failed to read plant info for EV DC-charger check: %w", err)
+	}
+	if plantInfo.DCChargerOutputPower > 0 {
+		s.logger.Printf("Skipping MPC battery control: EV is plugged into DC charger (ChargePower: %.1f kW, VehicleSOC: %.1f%%)",
+			plantInfo.DCChargerOutputPower, plantInfo.DCChargerVehicleSOC)
+		return nil
+	}
+
 	// Enable Remote EMS control
 	if err := client.EnableRemoteEMS(true); err != nil {
 		return fmt.Errorf("failed to enable remote EMS: %w", err)
