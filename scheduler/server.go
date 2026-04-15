@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"sort"
@@ -254,14 +255,14 @@ func (hs *WebServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Determine overall health status
+	w.Header().Set("Content-Type", "application/json")
 	if !status.IsRunning {
 		response.Status = "unhealthy"
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		log.Printf("healthHandler: failed to encode response: %v", err)
 	}
 }
 
