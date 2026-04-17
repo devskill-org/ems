@@ -472,7 +472,8 @@ func (hs *WebServer) wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Register new client
-	hs.clients.Store(conn, true)
+	mu := &sync.Mutex{}
+	hs.clients.Store(conn, mu)
 
 	clientCount := 0
 	hs.clients.Range(func(_, _ any) bool {
@@ -482,7 +483,9 @@ func (hs *WebServer) wsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("New WebSocket client connected. Total clients: %d\n", clientCount)
 
 	// Send initial data immediately
+	mu.Lock()
 	hs.sendStatusToClient(conn)
+	mu.Unlock()
 
 	// Handle client disconnection
 	defer func() {
@@ -514,13 +517,19 @@ func (hs *WebServer) handleBroadcasts() {
 	for {
 		select {
 		case message := <-hs.broadcast:
-			hs.clients.Range(func(key, _ any) bool {
+			hs.clients.Range(func(key, val any) bool {
 				conn, ok := key.(*websocket.Conn)
 				if !ok {
 					return true
 				}
+				mu, ok := val.(*sync.Mutex)
+				if !ok {
+					return true
+				}
 
+				mu.Lock()
 				err := conn.WriteMessage(websocket.TextMessage, message)
+				mu.Unlock()
 				if err != nil {
 					fmt.Printf("WebSocket write error: %v\n", err)
 					conn.Close() //nolint:gosec
