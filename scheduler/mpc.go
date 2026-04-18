@@ -140,7 +140,7 @@ func (s *MinerScheduler) readPlantRunningInfo(ctx context.Context, config *Confi
 	defer client.Close()
 
 	// Read plant running info
-	plantInfo, err := client.ReadPlantRunningInfo()
+	plantInfo, err := client.ReadPlantRunningInfo(byte(config.DCChargerSlaveID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read plant info: %w", err)
 	}
@@ -699,7 +699,7 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	// Check whether an EV is plugged into the DC charger. When it is, the
 	// inverter is already managing power delivery for the fast-charge session
 	// and we must not override its control mode or limits.
-	plantInfo, err := client.ReadPlantRunningInfo()
+	plantInfo, err := client.ReadPlantRunningInfo(byte(config.DCChargerSlaveID))
 	if err != nil {
 		return fmt.Errorf("failed to read plant info for EV DC-charger check: %w", err)
 	}

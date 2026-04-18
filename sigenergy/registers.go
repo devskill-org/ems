@@ -44,8 +44,9 @@ type PlantRunningInfo struct {
 	DCChargerVehicleSOC             float64 // %
 }
 
-// ReadPlantRunningInfo reads plant running information (slave address 247)
-func (c *SigenModbusClient) ReadPlantRunningInfo() (*PlantRunningInfo, error) {
+// ReadPlantRunningInfo reads plant running information (slave address 247).
+// dcChargerSlaveID is the Modbus slave ID used to read DC charger registers.
+func (c *SigenModbusClient) ReadPlantRunningInfo(dcChargerSlaveID byte) (*PlantRunningInfo, error) {
 	c.SetSlaveID(PlantAddress)
 
 	// Read main block (30000-30051, 52 registers)
@@ -101,7 +102,7 @@ func (c *SigenModbusClient) ReadPlantRunningInfo() (*PlantRunningInfo, error) {
 	// Registers 31502-31504 are Hybrid Inverter registers (section 5.3) and only respond
 	// to slave addresses 1-246, NOT the plant address 247.
 	// Note: This assumes at least one hybrid inverter is present with slave ID 1
-	c.SetSlaveID(2)
+	c.SetSlaveID(dcChargerSlaveID)
 
 	// Read DC Charger data (31502-31504)
 	data3, err := c.client.ReadInputRegisters(31502, 3)

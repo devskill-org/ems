@@ -8,7 +8,7 @@ import (
 )
 
 // ShowPlantInfo displays detailed information about the plant in a formatted table
-func ShowPlantInfo(ctx context.Context, plantModbusAddress string) error {
+func ShowPlantInfo(ctx context.Context, plantModbusAddress string, dcChargerSlaveID int) error {
 	if plantModbusAddress == "" {
 		return fmt.Errorf("PlantModbusAddress is not configured")
 	}
@@ -21,7 +21,7 @@ func ShowPlantInfo(ctx context.Context, plantModbusAddress string) error {
 	defer client.Close()
 
 	// Read plant running info
-	info, err := client.ReadPlantRunningInfo()
+	info, err := client.ReadPlantRunningInfo(byte(dcChargerSlaveID))
 	if err != nil {
 		return fmt.Errorf("error reading plant information: %w", err)
 	}

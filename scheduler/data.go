@@ -218,7 +218,7 @@ func (s *MinerScheduler) runDataPoll(ctx context.Context, samples *DataSamples) 
 		return err
 	}
 	defer client.Close()
-	info, err := client.ReadPlantRunningInfo()
+	info, err := client.ReadPlantRunningInfo(byte(s.config.DCChargerSlaveID))
 	if err != nil {
 		s.logger.Printf("Data integration: failed to read PlantRunningInfo: %v", err)
 		return err
@@ -444,7 +444,7 @@ func (s *MinerScheduler) GetPlantRunningInfo(ctx context.Context) *sigenergy.Pla
 	}
 	defer client.Close()
 
-	info, err := client.ReadPlantRunningInfo()
+	info, err := client.ReadPlantRunningInfo(byte(s.config.DCChargerSlaveID))
 	if err != nil {
 		s.logger.Printf("Failed to read plant running info: %v", err)
 		return nil

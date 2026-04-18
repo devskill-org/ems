@@ -46,7 +46,7 @@ func main() {
 			<-sigChan
 			cancel()
 		}()
-		if err := sigenergy.ShowPlantInfo(ctx, config.PlantModbusAddress); err != nil {
+		if err := sigenergy.ShowPlantInfo(ctx, config.PlantModbusAddress, config.DCChargerSlaveID); err != nil {
 			fmt.Println("Error:", err)
 			return
 		}
