@@ -312,9 +312,10 @@ function App() {
               <PowerDisplay
                 value={
                   health?.ems !== undefined
-                    ? health.ems.current_pv_power +
+                    ? (health.ems.current_pv_power +
                       health.ems.grid_sensor_active_power -
-                      health.ems.ess_power
+                    health.ems.ess_power -
+                    health.ems.dc_charger_output_power)
                     : undefined
                 }
                 label="Load Power"
