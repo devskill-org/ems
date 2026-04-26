@@ -64,10 +64,13 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 		BatteryDegradationCost:      config.BatteryDegradationCost,
 		MaxGridImport:               config.MaxGridImport,
 		MaxGridExport:               config.MaxGridExport,
-		BatteryPreHeatPower:         config.BatteryPreHeatPower,
-		BatteryPreHeatTempThreshold: config.BatteryPreHeatTempThreshold,
-		BatteryThermalTimeConstant:  config.BatteryThermalTimeConstant,
-		TimeSlotDuration:            timeSlotDuration,
+		BatteryPreHeatPower:              config.BatteryPreHeatPower,
+		BatteryPreHeatTempThreshold:      config.BatteryPreHeatTempThreshold,
+		BatteryThermalTimeConstant:       config.BatteryThermalTimeConstant,
+		TimeSlotDuration:                 timeSlotDuration,
+		BatteryBalancingSOCThreshold:     config.BatteryBalancingSOCThreshold,
+		BatteryBalancingEfficiencyFactor: config.BatteryBalancingEfficiencyFactor,
+		BatteryBalancingBonus:            config.BatteryBalancingBonus,
 	}
 
 	horizon := len(forecast)

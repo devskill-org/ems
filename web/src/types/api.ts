@@ -45,6 +45,9 @@ export interface EmsConfig {
   battery_preheat_power: number;
   battery_preheat_temp_threshold: number;
   battery_thermal_time_constant: number;
+  battery_balancing_soc_threshold: number;
+  battery_balancing_efficiency_factor: number;
+  battery_balancing_bonus: number;
   import_price_operator_fee: number;
   import_price_delivery_fee: number;
   export_price_operator_fee: number;

@@ -83,6 +83,11 @@ type Config struct {
 	BatteryPreHeatTempThreshold float64       `json:"battery_preheat_temp_threshold"` // °C - temperature threshold below which battery preheating activates
 	BatteryThermalTimeConstant  float64       `json:"battery_thermal_time_constant"`  // fraction per hour - rate at which battery temperature approaches air temperature (0-1), automatically scaled for time slot duration
 
+	// Battery cell-balancing parameters (0 = disabled for backward compatibility)
+	BatteryBalancingSOCThreshold     float64 `json:"battery_balancing_soc_threshold"`      // SOC level (0-1) above which CV-phase balancing begins; 0 disables
+	BatteryBalancingEfficiencyFactor float64 `json:"battery_balancing_efficiency_factor"`  // multiplier on BatteryEfficiency during CV phase (e.g. 0.3); 0 disables
+	BatteryBalancingBonus            float64 `json:"battery_balancing_bonus"`              // one-time profit bonus awarded when battery first reaches BatteryMaxSOC within the horizon; 0 disables
+
 	// Price adjustments
 	ImportPriceOperatorFee float64 `json:"import_price_operator_fee"` // EUR/MWh - Operator fee for import
 	ImportPriceDeliveryFee float64 `json:"import_price_delivery_fee"` // EUR/MWh - Delivery fee for import
@@ -135,9 +140,12 @@ func DefaultConfig() *Config {
 		MinerPowerStandard:          1.6,     // 1.6 kW (1600 W) in standard mode
 		MinerPowerSuper:             1.8,     // 1.8 kW (1800 W) in super mode
 		PVPowerControlPriceLimit:    99999.0, // Very high default keeps PV power control off until explicitly configured
-		BatteryPreHeatPower:         0.7,     // 0.7 kW (700 W) battery preheating power
-		BatteryPreHeatTempThreshold: 10.0,    // 10°C - activate battery preheating below this temperature
-		BatteryThermalTimeConstant:  0.05,    // 0.05 - battery temperature moves 5% toward air temp per hour (auto-scaled for time slot duration)
+		BatteryPreHeatPower:              0.7,  // 0.7 kW (700 W) battery preheating power
+		BatteryPreHeatTempThreshold:      10.0, // 10°C - activate battery preheating below this temperature
+		BatteryThermalTimeConstant:       0.05, // 0.05 - battery temperature moves 5% toward air temp per hour (auto-scaled for time slot duration)
+		BatteryBalancingSOCThreshold:     0.999, // CV phase starts at 99.9%
+		BatteryBalancingEfficiencyFactor: 0.1,   // ~10× more input energy needed in CV phase
+		BatteryBalancingBonus:            0.10,  // $0.10 one-time optimisation bonus for reaching BatteryMaxSOC
 	}
 }
 
@@ -377,6 +385,19 @@ func (c *Config) Validate() error {
 
 	if c.BatteryThermalTimeConstant < 0 || c.BatteryThermalTimeConstant > 1 {
 		return fmt.Errorf("battery_thermal_time_constant must be between 0 and 1, got: %f", c.BatteryThermalTimeConstant)
+	}
+
+	// Validate battery balancing configuration
+	if c.BatteryBalancingSOCThreshold != 0 && (c.BatteryBalancingSOCThreshold < 0 || c.BatteryBalancingSOCThreshold > 1) {
+		return fmt.Errorf("battery_balancing_soc_threshold must be 0 (disabled) or between 0 and 1, got: %f", c.BatteryBalancingSOCThreshold)
+	}
+
+	if c.BatteryBalancingEfficiencyFactor < 0 {
+		return fmt.Errorf("battery_balancing_efficiency_factor must be non-negative, got: %f", c.BatteryBalancingEfficiencyFactor)
+	}
+
+	if c.BatteryBalancingBonus < 0 {
+		return fmt.Errorf("battery_balancing_bonus must be non-negative, got: %f", c.BatteryBalancingBonus)
 	}
 
 	// Validate that MaxGridImport can handle battery charging with preheating
