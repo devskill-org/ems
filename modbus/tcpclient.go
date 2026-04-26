@@ -55,9 +55,9 @@ func TCPClient(address string) Client {
 // tcpPackager implements Packager interface.
 type tcpPackager struct {
 	// For synchronization between messages of server & client
-	transactionId uint32
+	transactionID uint32
 	// Broadcast address is 0
-	SlaveId byte
+	SlaveID byte
 }
 
 // Encode adds modbus application protocol header:
@@ -72,15 +72,15 @@ func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 	adu = make([]byte, tcpHeaderSize+1+len(pdu.Data))
 
 	// Transaction identifier
-	transactionId := atomic.AddUint32(&mb.transactionId, 1)
-	binary.BigEndian.PutUint16(adu, uint16(transactionId))
+	transactionID := atomic.AddUint32(&mb.transactionID, 1)
+	binary.BigEndian.PutUint16(adu, uint16(transactionID)) //nolint:gosec // transactionID wraps around uint32, lower 16 bits used for matching
 	// Protocol identifier
 	binary.BigEndian.PutUint16(adu[2:], tcpProtocolIdentifier)
-	// Length = sizeof(SlaveId) + sizeof(FunctionCode) + Data
-	length := uint16(1 + 1 + len(pdu.Data))
+	// Length = sizeof(SlaveID) + sizeof(FunctionCode) + Data
+	length := uint16(1 + 1 + len(pdu.Data)) //nolint:gosec // Data length is bounded by tcpMaxLength
 	binary.BigEndian.PutUint16(adu[4:], length)
 	// Unit identifier
-	adu[6] = mb.SlaveId
+	adu[6] = mb.SlaveID
 
 	// PDU
 	adu[tcpHeaderSize] = pdu.FunctionCode
@@ -187,12 +187,12 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 	// Read length, ignore transaction & protocol id (4 bytes)
 	length := int(binary.BigEndian.Uint16(data[4:]))
 	if length <= 0 {
-		mb.flush(data[:])
+		_ = mb.flush(data[:])
 		err = fmt.Errorf("modbus: length in response header '%v' must not be zero", length)
 		return
 	}
 	if length > (tcpMaxLength - (tcpHeaderSize - 1)) {
-		mb.flush(data[:])
+		_ = mb.flush(data[:])
 		err = fmt.Errorf("modbus: length in response header '%v' must not greater than '%v'", length, tcpMaxLength-tcpHeaderSize+1)
 		return
 	}
@@ -308,6 +308,7 @@ func (mb *tcpTransporter) closeIdle() {
 	idle := time.Since(mb.lastActivity)
 	if idle >= mb.IdleTimeout {
 		mb.logf("modbus: closing connection due to idle timeout: %v", idle)
-		mb.close()
+		_ = mb.close()
 	}
 }
+

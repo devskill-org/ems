@@ -480,13 +480,13 @@ func dataBlockSuffix(suffix []byte, value ...uint16) []byte {
 	for i, v := range value {
 		binary.BigEndian.PutUint16(data[i*2:], v)
 	}
-	data[length] = uint8(len(suffix))
+	data[length] = uint8(len(suffix)) //nolint:gosec // suffix length is bounded by protocol limits
 	copy(data[length+1:], suffix)
 	return data
 }
 
 func responseError(response *ProtocolDataUnit) error {
-	mbError := &ModbusError{FunctionCode: response.FunctionCode}
+	mbError := &Error{FunctionCode: response.FunctionCode}
 	if len(response.Data) > 0 {
 		mbError.ExceptionCode = response.Data[0]
 	}

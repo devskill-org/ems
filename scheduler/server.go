@@ -751,6 +751,9 @@ func (hs *WebServer) marketDataUploadHandler(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 
+	// Limit request body to 10 MB to prevent memory exhaustion.
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+
 	// Parse multipart form – limit body to 10 MB.
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		w.WriteHeader(http.StatusBadRequest)

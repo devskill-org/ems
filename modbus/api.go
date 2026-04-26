@@ -4,6 +4,7 @@
 
 package modbus
 
+// Client is a Modbus client providing access to coil and register operations.
 type Client interface {
 	// Bit access
 

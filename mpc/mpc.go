@@ -132,11 +132,11 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	// (PV surplus first, topped up by grid when profitable). We derive the
 	// PV portion as whatever charge the solar surplus can cover, and treat
 	// the remainder as the grid portion.
-	finalDecisions := make([]ControlDecision, len(decisionsWithSolar))
-	for i := range decisionsWithSolar {
+	n := min(len(decisionsWithSolar), len(forecast))
+	finalDecisions := make([]ControlDecision, n)
+	for i, slot := range forecast[:n] {
 		finalDecisions[i] = decisionsWithSolar[i]
 
-		slot := forecast[i]
 		totalCharge := decisionsWithSolar[i].BatteryCharge
 
 		// PV surplus available for charging after serving the load.
@@ -667,5 +667,5 @@ func (mpc *Controller) needsDailyBalancing(forecast []TimeSlot) bool {
 	ly, lm, ld := lastTime.Date()
 	fy, fm, fd := forecastStart.Date()
 	// Balancing is needed when the last balancing did NOT occur on the same calendar day.
-	return !(ly == fy && lm == fm && ld == fd)
+	return ly != fy || lm != fm || ld != fd
 }

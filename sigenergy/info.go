@@ -21,7 +21,7 @@ func ShowPlantInfo(ctx context.Context, plantModbusAddress string, dcChargerSlav
 	defer client.Close()
 
 	// Read plant running info
-	info, err := client.ReadPlantRunningInfo(byte(dcChargerSlaveID))
+	info, err := client.ReadPlantRunningInfo(byte(dcChargerSlaveID)) //nolint:gosec // SlaveID is expected to be in [0,255] range
 	if err != nil {
 		return fmt.Errorf("error reading plant information: %w", err)
 	}

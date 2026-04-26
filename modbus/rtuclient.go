@@ -41,7 +41,7 @@ func RTUClient(address string) Client {
 
 // rtuPackager implements Packager interface.
 type rtuPackager struct {
-	SlaveId byte
+	SlaveID byte
 }
 
 // Encode encodes PDU in a RTU frame:
@@ -57,7 +57,7 @@ func (mb *rtuPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 	}
 	adu = make([]byte, length)
 
-	adu[0] = mb.SlaveId
+	adu[0] = mb.SlaveID
 	adu[1] = pdu.FunctionCode
 	copy(adu[2:], pdu.Data)
 
@@ -66,8 +66,8 @@ func (mb *rtuPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 	crc.reset().pushBytes(adu[0 : length-2])
 	checksum := crc.value()
 
-	adu[length-1] = byte(checksum >> 8)
-	adu[length-2] = byte(checksum)
+	adu[length-1] = byte(checksum >> 8) //nolint:gosec // upper byte of uint16 CRC fits in byte
+	adu[length-2] = byte(checksum)       //nolint:gosec // lower byte of uint16 CRC fits in byte
 	return
 }
 
@@ -112,15 +112,15 @@ type rtuSerialTransporter struct {
 
 func (mb *rtuSerialTransporter) Send(aduRequest []byte) (aduResponse []byte, err error) {
 	// Make sure port is connected
-	if err = mb.serialPort.connect(); err != nil {
+	if err = mb.connect(); err != nil {
 		return
 	}
 	// Start the timer to close when idle
-	mb.serialPort.lastActivity = time.Now()
-	mb.serialPort.startCloseTimer()
+	mb.lastActivity = time.Now()
+	mb.startCloseTimer()
 
 	// Send the request
-	mb.serialPort.logf("modbus: sending % x\n", aduRequest)
+	mb.logf("modbus: sending % x\n", aduRequest)
 	if _, err = mb.port.Write(aduRequest); err != nil {
 		return
 	}
@@ -139,7 +139,8 @@ func (mb *rtuSerialTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		return
 	}
 	//if the function is correct
-	if data[1] == function {
+	switch data[1] {
+	case function:
 		//we read the rest of the bytes
 		if n < bytesToRead {
 			if bytesToRead > rtuMinSize && bytesToRead <= rtuMaxSize {
@@ -149,7 +150,7 @@ func (mb *rtuSerialTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 				}
 			}
 		}
-	} else if data[1] == functionFail {
+	case functionFail:
 		//for error we need to read 5 bytes
 		if n < rtuExceptionSize {
 			n1, err = io.ReadFull(mb.port, data[n:rtuExceptionSize])
@@ -161,7 +162,7 @@ func (mb *rtuSerialTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		return
 	}
 	aduResponse = data[:n]
-	mb.serialPort.logf("modbus: received % x\n", aduResponse)
+	mb.logf("modbus: received % x\n", aduResponse)
 	return
 }
 

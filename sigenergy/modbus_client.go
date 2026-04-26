@@ -34,7 +34,7 @@ func NewRTUClient(device string, baudRate int, slaveID byte) (*SigenModbusClient
 	handler.DataBits = 8
 	handler.Parity = "N"
 	handler.StopBits = 1
-	handler.SlaveId = slaveID
+	handler.SlaveID = slaveID
 	handler.Timeout = 1 * time.Second
 
 	err := handler.Connect()
@@ -54,7 +54,7 @@ func NewRTUClient(device string, baudRate int, slaveID byte) (*SigenModbusClient
 // is closed immediately, which unblocks any in-flight register read or write.
 func NewTCPClient(ctx context.Context, address string, slaveID byte) (*SigenModbusClient, error) {
 	handler := modbus.NewTCPClientHandler(address)
-	handler.SlaveId = slaveID
+	handler.SlaveID = slaveID
 	handler.Timeout = 1 * time.Second
 
 	if err := handler.ConnectWithContext(ctx); err != nil {
@@ -77,7 +77,7 @@ func NewTCPClient(ctx context.Context, address string, slaveID byte) (*SigenModb
 	go func() {
 		select {
 		case <-ctx.Done():
-			handler.Close()
+			_ = handler.Close()
 		case <-watchCtx.Done():
 			// Close() was called first — nothing to do, connection already closed.
 		}
@@ -103,10 +103,10 @@ func (c *SigenModbusClient) Close() error {
 // SetSlaveID changes the slave ID for subsequent operations
 func (c *SigenModbusClient) SetSlaveID(slaveID byte) {
 	if c.handler != nil {
-		c.handler.SlaveId = slaveID
+		c.handler.SlaveID = slaveID
 	}
 	if c.tcpHandler != nil {
-		c.tcpHandler.SlaveId = slaveID
+		c.tcpHandler.SlaveID = slaveID
 	}
 }
 
@@ -115,7 +115,7 @@ func bytesToU16(b []byte) uint16 {
 }
 
 func bytesToS16(b []byte) int16 {
-	return int16(binary.BigEndian.Uint16(b))
+	return int16(binary.BigEndian.Uint16(b)) //nolint:gosec // reinterpreting raw register bytes as signed 16-bit value by design
 }
 
 func bytesToU32(b []byte) uint32 {
@@ -123,7 +123,7 @@ func bytesToU32(b []byte) uint32 {
 }
 
 func bytesToS32(b []byte) int32 {
-	return int32(binary.BigEndian.Uint32(b))
+	return int32(binary.BigEndian.Uint32(b)) //nolint:gosec // reinterpreting raw register bytes as signed 32-bit value by design
 }
 
 func u32ToBytes(v uint32) []byte {
@@ -134,6 +134,6 @@ func u32ToBytes(v uint32) []byte {
 
 func s32ToBytes(v int32) []byte {
 	b := make([]byte, 4)
-	binary.BigEndian.PutUint32(b, uint32(v))
+	binary.BigEndian.PutUint32(b, uint32(v)) //nolint:gosec // reinterpreting signed 32-bit value as raw register bytes by design
 	return b
 }

@@ -15,42 +15,60 @@ import (
 )
 
 const (
-	// Bit access
+	// FuncCodeReadDiscreteInputs is the function code for reading discrete inputs (bit access).
 	FuncCodeReadDiscreteInputs = 2
+	// FuncCodeReadCoils is the function code for reading coils.
 	FuncCodeReadCoils          = 1
+	// FuncCodeWriteSingleCoil is the function code for writing a single coil.
 	FuncCodeWriteSingleCoil    = 5
+	// FuncCodeWriteMultipleCoils is the function code for writing multiple coils.
 	FuncCodeWriteMultipleCoils = 15
 
-	// 16-bit access
+	// FuncCodeReadInputRegisters is the function code for reading input registers (16-bit access).
 	FuncCodeReadInputRegisters         = 4
+	// FuncCodeReadHoldingRegisters is the function code for reading holding registers.
 	FuncCodeReadHoldingRegisters       = 3
+	// FuncCodeWriteSingleRegister is the function code for writing a single register.
 	FuncCodeWriteSingleRegister        = 6
+	// FuncCodeWriteMultipleRegisters is the function code for writing multiple registers.
 	FuncCodeWriteMultipleRegisters     = 16
+	// FuncCodeReadWriteMultipleRegisters is the function code for read/write of multiple registers.
 	FuncCodeReadWriteMultipleRegisters = 23
+	// FuncCodeMaskWriteRegister is the function code for mask-writing a register.
 	FuncCodeMaskWriteRegister          = 22
+	// FuncCodeReadFIFOQueue is the function code for reading a FIFO queue.
 	FuncCodeReadFIFOQueue              = 24
 )
 
 const (
+	// ExceptionCodeIllegalFunction indicates the function code is not supported.
 	ExceptionCodeIllegalFunction                    = 1
+	// ExceptionCodeIllegalDataAddress indicates the data address is not allowed.
 	ExceptionCodeIllegalDataAddress                 = 2
+	// ExceptionCodeIllegalDataValue indicates a value in the request is not allowed.
 	ExceptionCodeIllegalDataValue                   = 3
+	// ExceptionCodeServerDeviceFailure indicates an unrecoverable error occurred in the server.
 	ExceptionCodeServerDeviceFailure                = 4
+	// ExceptionCodeAcknowledge indicates the server has accepted the request and is processing it.
 	ExceptionCodeAcknowledge                        = 5
+	// ExceptionCodeServerDeviceBusy indicates the server is busy processing a long-duration command.
 	ExceptionCodeServerDeviceBusy                   = 6
+	// ExceptionCodeMemoryParityError indicates a parity error was detected in the extended memory.
 	ExceptionCodeMemoryParityError                  = 8
+	// ExceptionCodeGatewayPathUnavailable indicates the gateway path is unavailable.
 	ExceptionCodeGatewayPathUnavailable             = 10
+	// ExceptionCodeGatewayTargetDeviceFailedToRespond indicates the target device failed to respond.
 	ExceptionCodeGatewayTargetDeviceFailedToRespond = 11
 )
 
-// ModbusError implements error interface.
-type ModbusError struct {
+// Error represents a Modbus exception response from a remote device.
+type Error struct {
 	FunctionCode  byte
 	ExceptionCode byte
 }
 
 // Error converts known modbus exception code to error message.
-func (e *ModbusError) Error() string {
+func (e *Error) Error() string {
 	var name string
 	switch e.ExceptionCode {
 	case ExceptionCodeIllegalFunction:
