@@ -616,7 +616,7 @@ func (mpc *Controller) calculateNewSOC(currentSOC, charge, discharge float64) fl
 }
 
 func (mpc *Controller) socToIndex(soc float64, socStep float64) int {
-	return int(math.Round((soc - mpc.Config.BatteryMinSOC) / socStep))
+	return int(math.Floor((soc - mpc.Config.BatteryMinSOC) / socStep))
 }
 
 func (mpc *Controller) indexToSOC(index int, socStep float64) float64 {
