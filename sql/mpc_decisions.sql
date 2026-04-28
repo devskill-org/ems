@@ -20,6 +20,8 @@ CREATE TABLE mpc_decisions (
     battery_preheat_active BOOLEAN
 );
 
+CREATE INDEX idx_mpc_decisions_ts ON mpc_decisions USING BRIN (timestamp);
+
 -- Column descriptions:
 -- timestamp: Unix timestamp when this time slot begins (PRIMARY KEY)
 -- hour: Time slot index in the optimization horizon (0-based), represents periods based on check_price_interval (e.g., 15-minute intervals)
