@@ -60,6 +60,7 @@ type Config struct {
 	PVPollInterval      time.Duration `json:"pv_poll_interval"`      // Poll interval for PV power (duration)
 	PVIntegrationPeriod time.Duration `json:"pv_integration_period"` // Integration period for PV power (duration)
 	PostgresConnString  string        `json:"postgres_conn_string"`  // PostgreSQL connection string
+	DataServiceURL      string        `json:"data_service_url"`      // URL of the data-service HTTP server for MPC decisions
 
 	// Weather API settings
 	WeatherUpdateInterval time.Duration `json:"weather_update_interval"` // How often to update weather

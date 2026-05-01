@@ -2,45 +2,73 @@ package scheduler
 
 import (
 	"context"
-	"database/sql"
+	"encoding/json"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/devskill-org/ems/mpc"
-	_ "github.com/lib/pq"
 )
 
-// TestMPCPersistence_SaveAndLoad tests the save and load cycle
-func TestMPCPersistence_SaveAndLoad(t *testing.T) {
-	// Skip if no database connection available
-	connString := os.Getenv("TEST_POSTGRES_CONN")
-	if connString == "" {
-		t.Skip("Skipping test: TEST_POSTGRES_CONN not set")
-	}
+func makeTestDataService(t *testing.T) (string, *httptest.Server) {
+	t.Helper()
 
-	db, err := sql.Open("postgres", connString)
-	if err != nil {
-		t.Fatalf("Failed to connect to database: %v", err)
-	}
-	defer db.Close()
+	var decisions []mpc.ControlDecision
 
-	// Clean up table before test
-	_, err = db.Exec("DELETE FROM mpc_decisions")
-	if err != nil {
-		t.Fatalf("Failed to clean up table: %v", err)
-	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/mpc/save":
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			var saved []mpc.ControlDecision
+			if err := json.NewDecoder(r.Body).Decode(&saved); err != nil {
+				http.Error(w, "invalid JSON", http.StatusBadRequest)
+				return
+			}
+			decisions = saved
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":          "ok",
+				"decisions_saved": len(saved),
+			})
+		case "/mpc/get":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if len(decisions) == 0 {
+				json.NewEncoder(w).Encode([]mpc.ControlDecision{})
+				return
+			}
+			json.NewEncoder(w).Encode(decisions)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
 
-	// Create scheduler with database
-	config := &Config{}
+	return server.URL, server
+}
+
+func TestMPCDataSaveAndLoad(t *testing.T) {
+	url, server := makeTestDataService(t)
+	defer server.Close()
+
+	config := &Config{
+		DataServiceURL: url,
+	}
 	scheduler := &MinerScheduler{
-		config: config,
-		db:     db,
-		logger: log.New(os.Stdout, "TEST: ", log.LstdFlags),
+		config:            config,
+		dataServiceClient: newDataServiceClient(config),
+		logger:            log.New(os.Stdout, "TEST: ", log.LstdFlags),
 	}
 
-	// Create test decisions with timestamps in the future
 	now := time.Now().Unix()
 	decisions := []mpc.ControlDecision{
 		{
@@ -48,7 +76,7 @@ func TestMPCPersistence_SaveAndLoad(t *testing.T) {
 			Timestamp:             now + 3600,
 			BatteryCharge:         10.5,
 			BatteryChargeFromPV:   10.5,
-			BatteryChargeFromGrid:  5.0,
+			BatteryChargeFromGrid: 5.0,
 			BatteryDischarge:      0,
 			GridImport:            5.0,
 			GridExport:            0,
@@ -69,7 +97,7 @@ func TestMPCPersistence_SaveAndLoad(t *testing.T) {
 			Timestamp:             now + 7200,
 			BatteryCharge:         0,
 			BatteryChargeFromPV:   0,
-			BatteryChargeFromGrid:  0,
+			BatteryChargeFromGrid: 0,
 			BatteryDischarge:      8.0,
 			GridImport:            0,
 			GridExport:            3.0,
@@ -90,7 +118,7 @@ func TestMPCPersistence_SaveAndLoad(t *testing.T) {
 	ctx := context.Background()
 
 	// Save decisions
-	err = scheduler.saveMPCDecisions(ctx, decisions)
+	err := scheduler.saveMPCDecisions(ctx, decisions)
 	if err != nil {
 		t.Fatalf("Failed to save decisions: %v", err)
 	}
@@ -134,235 +162,124 @@ func TestMPCPersistence_SaveAndLoad(t *testing.T) {
 	}
 }
 
-// TestMPCPersistence_DeleteOldDecisions tests that old decisions are replaced
-func TestMPCPersistence_DeleteOldDecisions(t *testing.T) {
-	// Skip if no database connection available
-	connString := os.Getenv("TEST_POSTGRES_CONN")
-	if connString == "" {
-		t.Skip("Skipping test: TEST_POSTGRES_CONN not set")
-	}
+func TestMPCDataReplaceDecisions(t *testing.T) {
+	url, server := makeTestDataService(t)
+	defer server.Close()
 
-	db, err := sql.Open("postgres", connString)
-	if err != nil {
-		t.Fatalf("Failed to connect to database: %v", err)
+	config := &Config{
+		DataServiceURL: url,
 	}
-	defer db.Close()
-
-	// Clean up table before test
-	_, err = db.Exec("DELETE FROM mpc_decisions")
-	if err != nil {
-		t.Fatalf("Failed to clean up table: %v", err)
-	}
-
-	// Create scheduler with database
-	config := &Config{}
 	scheduler := &MinerScheduler{
-		config: config,
-		db:     db,
-		logger: log.New(os.Stdout, "TEST: ", log.LstdFlags),
+		config:            config,
+		dataServiceClient: newDataServiceClient(config),
+		logger:            log.New(os.Stdout, "TEST: ", log.LstdFlags),
 	}
 
 	now := time.Now().Unix()
 	ctx := context.Background()
 
-	// First, save decisions for hours 0-2
+	// First save: hours 0-2
 	firstDecisions := []mpc.ControlDecision{
 		{Hour: 0, Timestamp: now + 3600, Profit: 1.0},
 		{Hour: 1, Timestamp: now + 7200, Profit: 2.0},
 		{Hour: 2, Timestamp: now + 10800, Profit: 3.0},
 	}
-	err = scheduler.saveMPCDecisions(ctx, firstDecisions)
+	err := scheduler.saveMPCDecisions(ctx, firstDecisions)
 	if err != nil {
 		t.Fatalf("Failed to save first decisions: %v", err)
 	}
 
-	// Then, save new decisions starting from hour 1 (should replace hours 1-2)
+	// Verify
+	loaded, err := scheduler.loadLatestMPCDecisions(ctx)
+	if err != nil {
+		t.Fatalf("Failed to load decisions: %v", err)
+	}
+	if len(loaded) != 3 {
+		t.Fatalf("Expected 3 decisions after first save, got %d", len(loaded))
+	}
+	// Data-service replaces the entire list, so second save replaces all.
+	// Second save: hours 3-5 (replaces first 3)
 	secondDecisions := []mpc.ControlDecision{
-		{Hour: 1, Timestamp: now + 7200, Profit: 20.0},  // Updated
-		{Hour: 2, Timestamp: now + 10800, Profit: 30.0}, // Updated
-		{Hour: 3, Timestamp: now + 14400, Profit: 40.0}, // New
+		{Hour: 3, Timestamp: now + 14400, Profit: 40.0},
+		{Hour: 4, Timestamp: now + 18000, Profit: 50.0},
+		{Hour: 5, Timestamp: now + 21600, Profit: 60.0},
 	}
 	err = scheduler.saveMPCDecisions(ctx, secondDecisions)
 	if err != nil {
 		t.Fatalf("Failed to save second decisions: %v", err)
 	}
 
-	// Load all decisions (including past)
-	var allDecisions []mpc.ControlDecision
-	rows, err := db.Query("SELECT timestamp, profit FROM mpc_decisions ORDER BY timestamp")
+	// Verify: only the new 3 decisions should remain
+	loaded, err = scheduler.loadLatestMPCDecisions(ctx)
 	if err != nil {
-		t.Fatalf("Failed to query decisions: %v", err)
+		t.Fatalf("Failed to load decisions: %v", err)
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var d mpc.ControlDecision
-		err := rows.Scan(&d.Timestamp, &d.Profit)
-		if err != nil {
-			t.Fatalf("Failed to scan decision: %v", err)
-		}
-		allDecisions = append(allDecisions, d)
+	if len(loaded) != 3 {
+		t.Fatalf("Expected 3 decisions after second save (replace), got %d", len(loaded))
 	}
-
-	// Should have 4 decisions: hour 0 (unchanged), hours 1-3 (new/updated)
-	if len(allDecisions) != 4 {
-		t.Errorf("Expected 4 decisions, got %d", len(allDecisions))
+	if loaded[0].Hour != 3 || loaded[0].Profit != 40.0 {
+		t.Errorf("Expected first decision to be hour 3 profit 40.0, got hour %d profit %.2f", loaded[0].Hour, loaded[0].Profit)
 	}
-
-	// Verify hour 0 is unchanged
-	if allDecisions[0].Timestamp == now+3600 && allDecisions[0].Profit != 1.0 {
-		t.Errorf("Hour 0 should be unchanged with profit 1.0, got %.2f", allDecisions[0].Profit)
-	}
-
-	// Verify hour 1 is updated
-	if allDecisions[1].Timestamp == now+7200 && allDecisions[1].Profit != 20.0 {
-		t.Errorf("Hour 1 should be updated with profit 20.0, got %.2f", allDecisions[1].Profit)
+	if loaded[2].Hour != 5 || loaded[2].Profit != 60.0 {
+		t.Errorf("Expected last decision to be hour 5 profit 60.0, got hour %d profit %.2f", loaded[2].Hour, loaded[2].Profit)
 	}
 }
 
-// TestMPCPersistence_LoadOnlyFutureDecisions tests that only future decisions are loaded
-func TestMPCPersistence_LoadOnlyFutureDecisions(t *testing.T) {
-	// Skip if no database connection available
-	connString := os.Getenv("TEST_POSTGRES_CONN")
-	if connString == "" {
-		t.Skip("Skipping test: TEST_POSTGRES_CONN not set")
+func TestMPCDataNoDataService(t *testing.T) {
+	config := &Config{
+		DataServiceURL: "",
 	}
-
-	db, err := sql.Open("postgres", connString)
-	if err != nil {
-		t.Fatalf("Failed to connect to database: %v", err)
-	}
-	defer db.Close()
-
-	// Clean up table before test
-	_, err = db.Exec("DELETE FROM mpc_decisions")
-	if err != nil {
-		t.Fatalf("Failed to clean up table: %v", err)
-	}
-
-	// Create scheduler with database
-	config := &Config{}
 	scheduler := &MinerScheduler{
-		config: config,
-		db:     db,
-		logger: log.New(os.Stdout, "TEST: ", log.LstdFlags),
+		config:            config,
+		dataServiceClient: newDataServiceClient(config),
+		logger:            log.New(os.Stdout, "TEST: ", log.LstdFlags),
 	}
 
-	now := time.Now().Unix()
 	ctx := context.Background()
 
-	// Save decisions: some in the past, some in the future
-	decisions := []mpc.ControlDecision{
-		{Hour: 0, Timestamp: now - 3600, Profit: 1.0}, // Past
-		{Hour: 1, Timestamp: now - 1800, Profit: 2.0}, // Past
-		{Hour: 2, Timestamp: now + 1800, Profit: 3.0}, // Future
-		{Hour: 3, Timestamp: now + 3600, Profit: 4.0}, // Future
-		{Hour: 4, Timestamp: now + 7200, Profit: 5.0}, // Future
+	// Saving with no data-service should be a no-op (nil error)
+	err := scheduler.saveMPCDecisions(ctx, nil)
+	if err != nil {
+		t.Fatalf("save with no service should not error: %v", err)
 	}
 
-	// Insert directly to test load filtering
-	for _, d := range decisions {
-		_, err := db.Exec(`
-			INSERT INTO mpc_decisions (timestamp, hour, battery_charge, battery_charge_from_pv,
-				battery_charge_from_grid, battery_discharge, grid_import, grid_export, battery_soc,
-				profit, import_price, export_price, solar_forecast, load_forecast)
-			VALUES ($1, $2, 0, 0, 0, 0, 0, 0, 0.5, $3, 0.1, 0.05, 10, 5)
-		`, d.Timestamp, d.Hour, d.Profit)
-		if err != nil {
-			t.Fatalf("Failed to insert decision: %v", err)
-		}
+	// Loading with no data-service should return empty (nil error)
+	loaded, err := scheduler.loadLatestMPCDecisions(ctx)
+	if err != nil {
+		t.Fatalf("load with no service should not error: %v", err)
+	}
+	if len(loaded) != 0 {
+		t.Errorf("Expected empty list, got %d decisions", len(loaded))
+	}
+}
+
+func TestMPCDataEmptyList(t *testing.T) {
+	url, server := makeTestDataService(t)
+	defer server.Close()
+
+	config := &Config{
+		DataServiceURL: url,
+	}
+	scheduler := &MinerScheduler{
+		config:            config,
+		dataServiceClient: newDataServiceClient(config),
+		logger:            log.New(os.Stdout, "TEST: ", log.LstdFlags),
 	}
 
-	// Load decisions (should only get future ones)
+	ctx := context.Background()
+
+	// Save empty list
+	err := scheduler.saveMPCDecisions(ctx, []mpc.ControlDecision{})
+	if err != nil {
+		t.Fatalf("Failed to save empty decisions: %v", err)
+	}
+
+	// Loading should return empty
 	loaded, err := scheduler.loadLatestMPCDecisions(ctx)
 	if err != nil {
 		t.Fatalf("Failed to load decisions: %v", err)
 	}
-
-	// Should only load 3 future decisions
-	if len(loaded) != 3 {
-		t.Errorf("Expected 3 future decisions, got %d", len(loaded))
-	}
-
-	// Verify all loaded decisions are in the future
-	for i, decision := range loaded {
-		if decision.Timestamp < now {
-			t.Errorf("Decision %d has past timestamp %d (now: %d)", i, decision.Timestamp, now)
-		}
-	}
-
-	// Verify they are ordered by timestamp
-	for i := 1; i < len(loaded); i++ {
-		if loaded[i].Timestamp <= loaded[i-1].Timestamp {
-			t.Errorf("Decisions not properly ordered by timestamp")
-		}
-	}
-}
-
-// TestMPCPersistence_UniqueTimestamp tests that timestamp PRIMARY KEY prevents duplicates
-func TestMPCPersistence_UniqueTimestamp(t *testing.T) {
-	// Skip if no database connection available
-	connString := os.Getenv("TEST_POSTGRES_CONN")
-	if connString == "" {
-		t.Skip("Skipping test: TEST_POSTGRES_CONN not set")
-	}
-
-	db, err := sql.Open("postgres", connString)
-	if err != nil {
-		t.Fatalf("Failed to connect to database: %v", err)
-	}
-	defer db.Close()
-
-	// Clean up table before test
-	_, err = db.Exec("DELETE FROM mpc_decisions")
-	if err != nil {
-		t.Fatalf("Failed to clean up table: %v", err)
-	}
-
-	now := time.Now().Unix()
-	timestamp := now + 3600
-
-	// Insert first decision
-	_, err = db.Exec(`
-		INSERT INTO mpc_decisions (timestamp, hour, battery_charge, battery_charge_from_pv,
-			battery_charge_from_grid, battery_discharge, grid_import, grid_export, battery_soc,
-			profit, import_price, export_price, solar_forecast, load_forecast)
-		VALUES ($1, 0, 10, 10, 0, 0, 5, 0, 0.6, 2.5, 0.1, 0.05, 15, 10)
-	`, timestamp)
-	if err != nil {
-		t.Fatalf("Failed to insert first decision: %v", err)
-	}
-
-	// Try to insert duplicate timestamp (should be handled by UPSERT in saveMPCDecisions)
-	_, err = db.Exec(`
-		INSERT INTO mpc_decisions (timestamp, hour, battery_charge, battery_charge_from_pv,
-			battery_charge_from_grid, battery_discharge, grid_import, grid_export, battery_soc,
-			profit, import_price, export_price, solar_forecast, load_forecast)
-		VALUES ($1, 1, 20, 20, 0, 0, 10, 0, 0.7, 5.0, 0.12, 0.06, 20, 12)
-		ON CONFLICT (timestamp) DO UPDATE SET
-			hour = EXCLUDED.hour,
-			profit = EXCLUDED.profit
-	`, timestamp)
-	if err != nil {
-		t.Fatalf("UPSERT failed: %v", err)
-	}
-
-	// Verify only one row exists and it's updated
-	var count int
-	var profit float64
-	var hour int
-	err = db.QueryRow("SELECT COUNT(*), MAX(hour), MAX(profit) FROM mpc_decisions WHERE timestamp = $1", timestamp).Scan(&count, &hour, &profit)
-	if err != nil {
-		t.Fatalf("Failed to query: %v", err)
-	}
-
-	if count != 1 {
-		t.Errorf("Expected 1 row, got %d", count)
-	}
-	if hour != 1 {
-		t.Errorf("Expected hour to be updated to 1, got %d", hour)
-	}
-	if profit != 5.0 {
-		t.Errorf("Expected profit to be updated to 5.0, got %.2f", profit)
+	if len(loaded) != 0 {
+		t.Errorf("Expected empty list, got %d decisions", len(loaded))
 	}
 }
