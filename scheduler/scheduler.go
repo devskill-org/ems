@@ -255,13 +255,17 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 	}
 
 	// Load latest MPC decisions from data-service on startup
-	if decisions, err := s.loadLatestMPCDecisions(ctx); err != nil {
-		s.logger.Printf("Warning: Failed to load MPC decisions from data-service: %v", err)
-	} else if len(decisions) > 0 {
-		s.mu.Lock()
-		s.mpcDecisions = decisions
-		s.mu.Unlock()
-		s.logger.Printf("Loaded %d MPC decisions from data-service on startup", len(decisions))
+	for attempt := range 3 {
+		if decisions, err := s.loadLatestMPCDecisions(ctx); err != nil {
+			s.logger.Printf("Warning: Attempt %d failed to load MPC decisions from data-service: %v", attempt, 	err)
+			time.Sleep(2 * time.Second)
+		} else if len(decisions) > 0 {
+			s.mu.Lock()
+			s.mpcDecisions = decisions
+			s.mu.Unlock()
+			s.logger.Printf("Loaded %d MPC decisions from data-service on startup", len(decisions))
+			break
+		}
 	}
 
 	// Calculate initial delays
