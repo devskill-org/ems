@@ -74,6 +74,20 @@ dev-watch: ## Run with file watching (requires entr: brew install entr)
 	@which entr > /dev/null || (echo "entr not installed for file watching" && exit 1)
 	find . -name '*.go' | entr -r go run . -price-limit=50.0 -network=192.168.1.0/24
 
+# Data-service Docker targets
+DATA_SERVICE_IMAGE=data-service
+DATA_SERVICE_DOCKERFILE=Dockerfile.data-service
+
+docker-data-service-multi: ## Build Docker image for data-service for multiple platforms
+	docker buildx build --platform $(PLATFORMS) -t $(DATA_SERVICE_IMAGE):$(DOCKER_TAG) -f $(DATA_SERVICE_DOCKERFILE) .
+
+docker-data-service: ## Build Docker image for data-service for ARM7 (Raspberry Pi)
+	rm -f ems-data-service-working.tar
+	docker buildx build --platform linux/arm/v7 --no-cache --output=type=docker -t $(DATA_SERVICE_IMAGE):latest-arm7 -f $(DATA_SERVICE_DOCKERFILE) .
+	docker save $(DATA_SERVICE_IMAGE):latest-arm7 > data-service.tar
+	skopeo copy docker-archive:data-service.tar docker-archive:ems-data-service-working.tar
+	cp ems-data-service-working.tar ~/Downloads/ems-data-service-working.tar
+
 # Docker targets
 docker: ## Build Docker image for ARM7 (Raspberry Pi)
 	rm -f ems-working.tar

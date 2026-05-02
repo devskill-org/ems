@@ -131,8 +131,11 @@ type MinerScheduler struct {
 	// Web server
 	webServer *WebServer
 
-	// Database connection
+	// Database connection (kept for metrics, not used for MPC decisions)
 	db *sql.DB
+
+	// Data-service HTTP client for MPC decisions
+	dataServiceClient *dataServiceClient
 
 	// Logging
 	logger *log.Logger
@@ -148,10 +151,11 @@ func NewMinerScheduler(config *Config, logger *log.Logger) *MinerScheduler {
 	}
 
 	scheduler := &MinerScheduler{
-		config:   config,
-		stopChan: make(chan struct{}),
-		logger:   logger,
-		xmlCache: entsoe.NewXMLDocumentCache(),
+		config:            config,
+		stopChan:          make(chan struct{}),
+		logger:            logger,
+		xmlCache:          entsoe.NewXMLDocumentCache(),
+		dataServiceClient: newDataServiceClient(config),
 		weatherCache: WeatherForecastCache{
 			cacheDuration: 2 * time.Hour,
 		},
@@ -247,17 +251,17 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			dataDB = nil
 		} else {
 			s.db = dataDB
-
-			// Load latest MPC decisions from database
-			if decisions, err := s.loadLatestMPCDecisions(ctx); err != nil {
-				s.logger.Printf("Warning: Failed to load MPC decisions from database: %v", err)
-			} else if len(decisions) > 0 {
-				s.mu.Lock()
-				s.mpcDecisions = decisions
-				s.mu.Unlock()
-				s.logger.Printf("Loaded %d MPC decisions from database on startup", len(decisions))
-			}
 		}
+	}
+
+	// Load latest MPC decisions from data-service on startup
+	if decisions, err := s.loadLatestMPCDecisions(ctx); err != nil {
+		s.logger.Printf("Warning: Failed to load MPC decisions from data-service: %v", err)
+	} else if len(decisions) > 0 {
+		s.mu.Lock()
+		s.mpcDecisions = decisions
+		s.mu.Unlock()
+		s.logger.Printf("Loaded %d MPC decisions from data-service on startup", len(decisions))
 	}
 
 	// Calculate initial delays

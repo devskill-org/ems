@@ -1,250 +1,122 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
-	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
 
 	"github.com/devskill-org/ems/mpc"
 )
 
-// saveMPCDecisions persists MPC decisions to the database
-func (s *MinerScheduler) saveMPCDecisions(ctx context.Context, decisions []mpc.ControlDecision) error {
-	if s.db == nil {
-		return fmt.Errorf("database connection not available")
-	}
+// dataServiceClient handles communication with the data-service HTTP server
+// for storing and retrieving MPC decisions.
+type dataServiceClient struct {
+	baseURL string
+	client  *http.Client
+}
 
+// newDataServiceClient creates a new data-service client.
+// Returns nil if baseURL is empty.
+func newDataServiceClient(config *Config) *dataServiceClient {
+	if config.DataServiceURL == "" {
+		return nil
+	}
+	return &dataServiceClient{
+		baseURL: config.DataServiceURL,
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+		},
+	}
+}
+
+// saveMPCDecisions sends decisions to the data-service via its POST /mpc/save endpoint.
+// The data-service replaces the full in-memory list with the provided decisions.
+func (s *MinerScheduler) saveMPCDecisions(ctx context.Context, decisions []mpc.ControlDecision) error {
+	if s.dataServiceClient == nil {
+		return nil // data-service not configured, skip storage
+	}
 	if len(decisions) == 0 {
 		return nil
 	}
 
-	// Use first decision timestamp as minimum
-	// Decisions are ordered by timestamp because:
-	// 1. MPC forecast is built from a map and explicitly sorted by hour
-	// 2. MPC controller reconstructs path in the same order as forecast
-	// 3. Timestamp increases monotonically with hour
-	minTimestamp := decisions[0].Timestamp
-
-	// Begin transaction
-	tx, err := s.db.BeginTx(ctx, nil)
+	body, err := json.Marshal(decisions)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return fmt.Errorf("failed to marshal decisions: %w", err)
 	}
-	defer tx.Rollback()
 
-	// Delete existing decisions with timestamp >= minTimestamp
-	_, err = tx.ExecContext(ctx, `DELETE FROM mpc_decisions WHERE timestamp >= $1`, minTimestamp)
+	url := s.dataServiceClient.baseURL + "/mpc/save"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	if err != nil {
-		return fmt.Errorf("failed to delete existing decisions: %w", err)
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Prepare upsert statement
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO mpc_decisions (
-			timestamp,
-			hour,
-			battery_charge,
-			battery_charge_from_pv,
-			battery_charge_from_grid,
-			battery_discharge,
-			grid_import,
-			grid_export,
-			battery_soc,
-			profit,
-			import_price,
-			export_price,
-			solar_forecast,
-			load_forecast,
-			cloud_coverage,
-			weather_symbol,
-			battery_avg_cell_temp,
-			air_temperature,
-			battery_preheat_active
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-		ON CONFLICT (timestamp) DO UPDATE SET
-			hour = EXCLUDED.hour,
-			battery_charge = EXCLUDED.battery_charge,
-			battery_charge_from_pv = EXCLUDED.battery_charge_from_pv,
-			battery_charge_from_grid = EXCLUDED.battery_charge_from_grid,
-			battery_discharge = EXCLUDED.battery_discharge,
-			grid_import = EXCLUDED.grid_import,
-			grid_export = EXCLUDED.grid_export,
-			battery_soc = EXCLUDED.battery_soc,
-			profit = EXCLUDED.profit,
-			import_price = EXCLUDED.import_price,
-			export_price = EXCLUDED.export_price,
-			solar_forecast = EXCLUDED.solar_forecast,
-			load_forecast = EXCLUDED.load_forecast,
-			cloud_coverage = EXCLUDED.cloud_coverage,
-			weather_symbol = EXCLUDED.weather_symbol,
-			battery_avg_cell_temp = EXCLUDED.battery_avg_cell_temp,
-			air_temperature = EXCLUDED.air_temperature,
-			battery_preheat_active = EXCLUDED.battery_preheat_active
-	`)
+	resp, err := s.dataServiceClient.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to prepare statement: %w", err)
+		return fmt.Errorf("failed to POST to data-service: %w", err)
 	}
-	defer stmt.Close()
+	defer resp.Body.Close()
 
-	// Insert all decisions
-	for _, decision := range decisions {
-		_, err := stmt.ExecContext(ctx,
-			decision.Timestamp,
-			decision.Hour,
-			decision.BatteryCharge,
-			decision.BatteryChargeFromPV,
-			decision.BatteryChargeFromGrid,
-			decision.BatteryDischarge,
-			decision.GridImport,
-			decision.GridExport,
-			decision.BatterySOC,
-			decision.Profit,
-			decision.ImportPrice,
-			decision.ExportPrice,
-			decision.SolarForecast,
-			decision.LoadForecast,
-			decision.CloudCoverage,
-			decision.WeatherSymbol,
-			decision.BatteryAvgCellTemp,
-			decision.AirTemperature,
-			decision.BatteryPreHeatActive,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to insert decision for hour %d: %w", decision.Hour, err)
-		}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("data-service POST /mpc/save returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	s.logger.Printf("Saved %d MPC decisions to database", len(decisions))
+	_, _ = io.Copy(io.Discard, resp.Body) // drain body to reuse connection
+	s.logger.Printf("Saved %d MPC decisions to data-service", len(decisions))
 	return nil
 }
 
-// loadLatestMPCDecisions loads MPC decisions from the database with timestamp >= now
+// loadLatestMPCDecisions fetches the current list of MPC decisions from the
+// data-service via its GET /mpc/get endpoint.  Unlike the previous DB variant
+// this does NOT filter by timestamp — the data-service holds decisions for all
+// hours; the scheduler can filter client-side if needed.
 func (s *MinerScheduler) loadLatestMPCDecisions(ctx context.Context) ([]mpc.ControlDecision, error) {
-	if s.db == nil {
-		return nil, fmt.Errorf("database connection not available")
+	if s.dataServiceClient == nil {
+		return nil, nil // data-service not configured
 	}
-
-	config := s.GetConfig()
-
-	// Get current Unix timestamp
-	now := ctx.Value("now")
-	var nowTimestamp int64
-	if now != nil {
-		if t, ok := now.(int64); ok {
-			nowTimestamp = t
-		}
-	}
-	if nowTimestamp == 0 {
-		nowTimestamp = s.getCurrentTimestamp()
-	}
-
-	ts := nowTimestamp - int64(config.CheckPriceInterval.Seconds())
-
-	// Load decisions with timestamp >= now, ordered by timestamp
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT
-			timestamp,
-			hour,
-			battery_charge,
-			battery_charge_from_pv,
-			battery_charge_from_grid,
-			battery_discharge,
-			grid_import,
-			grid_export,
-			battery_soc,
-			profit,
-			import_price,
-			export_price,
-			solar_forecast,
-			load_forecast,
-			cloud_coverage,
-			weather_symbol,
-			battery_avg_cell_temp,
-			air_temperature,
-			battery_preheat_active
-		FROM mpc_decisions
-		WHERE timestamp >= $1
-		ORDER BY timestamp ASC
-	`, ts)
+	url := s.dataServiceClient.baseURL + "/mpc/get"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query decisions: %w", err)
-	}
-	defer rows.Close()
-
-	var decisions []mpc.ControlDecision
-	for rows.Next() {
-		var decision mpc.ControlDecision
-		var cloudCoverage sql.NullFloat64
-		var weatherSymbol sql.NullString
-		var batteryAvgCellTemp sql.NullFloat64
-		var airTemperature sql.NullFloat64
-		var batteryPreHeatActive sql.NullBool
-
-		err := rows.Scan(
-			&decision.Timestamp,
-			&decision.Hour,
-			&decision.BatteryCharge,
-			&decision.BatteryChargeFromPV,
-			&decision.BatteryChargeFromGrid,
-			&decision.BatteryDischarge,
-			&decision.GridImport,
-			&decision.GridExport,
-			&decision.BatterySOC,
-			&decision.Profit,
-			&decision.ImportPrice,
-			&decision.ExportPrice,
-			&decision.SolarForecast,
-			&decision.LoadForecast,
-			&cloudCoverage,
-			&weatherSymbol,
-			&batteryAvgCellTemp,
-			&airTemperature,
-			&batteryPreHeatActive,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan decision: %w", err)
-		}
-
-		if cloudCoverage.Valid {
-			decision.CloudCoverage = cloudCoverage.Float64
-		}
-		if weatherSymbol.Valid {
-			decision.WeatherSymbol = weatherSymbol.String
-		}
-		if batteryAvgCellTemp.Valid {
-			decision.BatteryAvgCellTemp = batteryAvgCellTemp.Float64
-		}
-		if airTemperature.Valid {
-			decision.AirTemperature = airTemperature.Float64
-		}
-		if batteryPreHeatActive.Valid {
-			decision.BatteryPreHeatActive = batteryPreHeatActive.Bool
-		}
-
-		decisions = append(decisions, decision)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating decisions: %w", err)
+	resp, err := s.dataServiceClient.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to GET from data-service: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("data-service GET /mpc/get returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Load decisions
+	decisions, err := loadDecisionsFromReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode MPC decisions: %w", err)
 	}
 
 	if len(decisions) == 0 {
-		s.logger.Printf("No future MPC decisions found in database")
+		s.logger.Printf("No MPC decisions found in data-service")
 		return nil, nil
 	}
 
-	s.logger.Printf("Loaded %d MPC decisions from database (starting from timestamp %d)", len(decisions), ts)
-
+	s.logger.Printf("Loaded %d MPC decisions from data-service", len(decisions))
 	return decisions, nil
 }
 
-// getCurrentTimestamp returns the current Unix timestamp
-func (s *MinerScheduler) getCurrentTimestamp() int64 {
-	return time.Now().Unix()
+// loadDecisionsFromReader decodes MPC decisions from an io.Reader.
+func loadDecisionsFromReader(r io.Reader) ([]mpc.ControlDecision, error) {
+	var decisions []mpc.ControlDecision
+	err := json.NewDecoder(r).Decode(&decisions)
+	if err != nil {
+		return nil, err
+	}
+	return decisions, nil
 }
