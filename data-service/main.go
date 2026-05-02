@@ -34,7 +34,7 @@ func main() {
 	server := &http.Server{
 		Addr:              ":" + port,
 		Handler:           mux,
-		ReadHeaderTimeout: 1 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	go func() {

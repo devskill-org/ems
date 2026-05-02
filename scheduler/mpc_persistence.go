@@ -28,7 +28,7 @@ func newDataServiceClient(config *Config) *dataServiceClient {
 	return &dataServiceClient{
 		baseURL: config.DataServiceURL,
 		client: &http.Client{
-			Timeout: 2 * time.Second,
+			Timeout: 10 * time.Second,
 		},
 	}
 }
