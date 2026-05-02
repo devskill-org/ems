@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/devskill-org/ems/miners"
+	"github.com/devskill-org/ems/mpc"
 )
 
 // This file contains unit tests for the estimateLoadForecast function in mpc.go.
@@ -540,5 +541,60 @@ func TestEstimateLoadForecast_TableDriven(t *testing.T) {
 				t.Errorf("%s: expected %.4f, got %.4f", tc.description, tc.want, got)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// decideBatteryAction tests
+// ---------------------------------------------------------------------------
+
+func TestDecideBatteryAction_DischargeNegativeExportUsesMode2(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryDischarge:      3.0,
+		ExportPrice:           -0.05,
+		BatteryChargeFromGrid: 0,
+		BatteryChargeFromPV:   0,
+	}
+	action := decideBatteryAction(decision, 5.0)
+	if action.mode != 2 {
+		t.Errorf("expected mode 2, got %d", action.mode)
+	}
+	if action.setDischarge {
+		t.Errorf("expected setDischarge false, got true")
+	}
+}
+
+func TestDecideBatteryAction_DischargeZeroExportUsesMode2(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryDischarge:      3.0,
+		ExportPrice:           0.0,
+		BatteryChargeFromGrid: 0,
+		BatteryChargeFromPV:   0,
+	}
+	action := decideBatteryAction(decision, 5.0)
+	if action.mode != 2 {
+		t.Errorf("expected mode 2, got %d", action.mode)
+	}
+	if action.setDischarge {
+		t.Errorf("expected setDischarge false, got true")
+	}
+}
+
+func TestDecideBatteryAction_DischargePositiveExportUsesMode5(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryDischarge:      3.0,
+		ExportPrice:           0.20,
+		BatteryChargeFromGrid: 0,
+		BatteryChargeFromPV:   0,
+	}
+	action := decideBatteryAction(decision, 5.0)
+	if action.mode != 5 {
+		t.Errorf("expected mode 5, got %d", action.mode)
+	}
+	if !action.setDischarge {
+		t.Errorf("expected setDischarge true, got false")
+	}
+	if action.dischargeLimit != 3.0 {
+		t.Errorf("expected dischargeLimit 3.0, got %.2f", action.dischargeLimit)
 	}
 }
