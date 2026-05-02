@@ -662,15 +662,15 @@ func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64) batte
 		return batteryAction{mode: 2, chargeLimit: limit, setCharge: true, logMsg: msg}
 
 	case decision.BatteryDischarge > 0.01:
-		// When the export price is non-positive, avoid Mode 5 (forced discharge)
+		// When the export is not planned, avoid Mode 5 (forced discharge)
 		// because forecast overestimation could cause excess grid export at a
 		// financial loss.  Mode 2 (Maximum self-consumption) discharges the
 		// battery reactively to cover actual load only, preventing unwanted export.
-		// Note: ESSMaxDischargingLimit only takes effect in Mode 5/6, so
-		// setDischarge is false and dischargeLimit is left at zero for Mode 2.
-		if decision.ExportPrice <= 0 {
+		if decision.GridExport < 0.01 && decision.LoadForecast <= decision.BatteryDischarge {
 			return batteryAction{
 				mode:   2,
+				setDischarge:   true,
+				dischargeLimit: decision.BatteryDischarge,
 				logMsg: fmt.Sprintf("Setting battery to DISCHARGE mode (self-consumption, export price non-positive — using Mode 2 to prevent grid export): %.1f kW", decision.BatteryDischarge),
 			}
 		}

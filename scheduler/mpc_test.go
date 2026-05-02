@@ -559,8 +559,8 @@ func TestDecideBatteryAction_DischargeNegativeExportUsesMode2(t *testing.T) {
 	if action.mode != 2 {
 		t.Errorf("expected mode 2, got %d", action.mode)
 	}
-	if action.setDischarge {
-		t.Errorf("expected setDischarge false, got true")
+	if !action.setDischarge {
+		t.Errorf("expected setDischarge true, got false")
 	}
 }
 
@@ -575,14 +575,17 @@ func TestDecideBatteryAction_DischargeZeroExportUsesMode2(t *testing.T) {
 	if action.mode != 2 {
 		t.Errorf("expected mode 2, got %d", action.mode)
 	}
-	if action.setDischarge {
-		t.Errorf("expected setDischarge false, got true")
+	if !action.setDischarge {
+		t.Errorf("expected setDischarge true, got false")
 	}
 }
 
-func TestDecideBatteryAction_DischargePositiveExportUsesMode5(t *testing.T) {
+func TestDecideBatteryAction_DischargeWithPlannedGridExportUsesMode5(t *testing.T) {
+	// Mode 5 (forced discharge) is selected when the MPC has explicitly planned
+	// grid export (GridExport > 0.01), regardless of ExportPrice.
 	decision := &mpc.ControlDecision{
 		BatteryDischarge:      3.0,
+		GridExport:            2.0,
 		ExportPrice:           0.20,
 		BatteryChargeFromGrid: 0,
 		BatteryChargeFromPV:   0,
