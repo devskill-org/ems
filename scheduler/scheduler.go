@@ -142,6 +142,7 @@ type MinerScheduler struct {
 
 	// Test hooks for dependency injection
 	minerDiscoveryFunc func(ctx context.Context, network string) []*miners.AvalonQHost
+	openMeteoBaseURL   string // overrides Open-Meteo base URL when non-empty (testing only)
 }
 
 // NewMinerScheduler creates a new scheduler instance
@@ -257,7 +258,7 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 	// Load latest MPC decisions from data-service on startup
 	for attempt := range 3 {
 		if decisions, err := s.loadLatestMPCDecisions(ctx); err != nil {
-			s.logger.Printf("Warning: Attempt %d failed to load MPC decisions from data-service: %v", attempt, 	err)
+			s.logger.Printf("Warning: Attempt %d failed to load MPC decisions from data-service: %v", attempt, err)
 			time.Sleep(2 * time.Second)
 		} else if len(decisions) > 0 {
 			s.mu.Lock()

@@ -3,11 +3,15 @@ package scheduler
 import (
 	"fmt"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/devskill-org/ems/miners"
 	"github.com/devskill-org/ems/mpc"
+	"github.com/devskill-org/ems/openmeteo"
 )
 
 // This file contains unit tests for the estimateLoadForecast function in mpc.go.
@@ -51,11 +55,11 @@ func newMPCTestScheduler(cfg *Config, numMiners int) *MinerScheduler {
 // baseConfig returns a Config with sensible power values suitable for most tests.
 func baseConfig() *Config {
 	return &Config{
-		MinerPowerStandby:  0.1,
-		MinerPowerEco:      1.0,
-		MinerPowerStandard: 1.5,
-		MinerPowerSuper:    2.0,
-		MinersPowerLimit:   20.0, // large enough not to be a bottleneck unless tested
+		MinerPowerStandby:        0.1,
+		MinerPowerEco:            1.0,
+		MinerPowerStandard:       1.5,
+		MinerPowerSuper:          2.0,
+		MinersPowerLimit:         20.0, // large enough not to be a bottleneck unless tested
 		PVPowerControlPriceLimit: 999.0,
 	}
 }
@@ -458,11 +462,11 @@ func TestEstimateLoadForecast_PriceJustAboveLimit(t *testing.T) {
 
 func TestEstimateLoadForecast_TableDriven(t *testing.T) {
 	cfg := &Config{
-		MinerPowerStandby:  0.1,
-		MinerPowerEco:      1.0,
-		MinerPowerStandard: 1.5,
-		MinerPowerSuper:    2.0,
-		MinersPowerLimit:   20.0,
+		MinerPowerStandby:        0.1,
+		MinerPowerEco:            1.0,
+		MinerPowerStandard:       1.5,
+		MinerPowerSuper:          2.0,
+		MinersPowerLimit:         20.0,
 		PVPowerControlPriceLimit: 10.0,
 	}
 
@@ -477,49 +481,49 @@ func TestEstimateLoadForecast_TableDriven(t *testing.T) {
 		description string
 	}{
 		{
-			name: "price above limit all standby",
+			name:      "price above limit all standby",
 			numMiners: 4, hourlyPrice: 150, priceLimit: 0.1, solar: 20, powerLimit: 20,
 			want:        4 * 0.1,
 			description: "all 4 miners in standby when price exceeds limit",
 		},
 		{
-			name: "zero solar all standby",
+			name:      "zero solar all standby",
 			numMiners: 3, hourlyPrice: 50, priceLimit: 0.1, solar: 0, powerLimit: 20,
 			want:        3 * 0.1,
 			description: "all standby when solar is zero",
 		},
 		{
-			name: "solar covers all miners at super",
+			name:      "solar covers all miners at super",
 			numMiners: 3, hourlyPrice: 50, priceLimit: 0.1, solar: 10, powerLimit: 20,
 			want:        3 * 2.0,
 			description: "3 miners × Super(2.0) = 6.0 kW ≤ 10.0 kW solar",
 		},
 		{
-			name: "solar covers two miners at super",
+			name:      "solar covers two miners at super",
 			numMiners: 4, hourlyPrice: 50, priceLimit: 0.1, solar: 5, powerLimit: 20,
 			want:        2*2.0 + 2*0.1,
 			description: "floor(5/2.0)=2 Super miners, 2 standby",
 		},
 		{
-			name: "solar too low for super falls to standard",
+			name:      "solar too low for super falls to standard",
 			numMiners: 3, hourlyPrice: 50, priceLimit: 0.1, solar: 1.8, powerLimit: 20,
 			want:        1*1.5 + 2*0.1,
 			description: "Super fails (floor(1.8/2.0)=0), Standard ok (floor(1.8/1.5)=1)",
 		},
 		{
-			name: "solar too low for standard falls to eco",
+			name:      "solar too low for standard falls to eco",
 			numMiners: 3, hourlyPrice: 50, priceLimit: 0.1, solar: 1.2, powerLimit: 20,
 			want:        1*1.0 + 2*0.1,
 			description: "Super/Standard fail, Eco ok (floor(1.2/1.0)=1)",
 		},
 		{
-			name: "solar too low for any mode",
+			name:      "solar too low for any mode",
 			numMiners: 3, hourlyPrice: 50, priceLimit: 0.1, solar: 0.8, powerLimit: 20,
 			want:        3 * 0.1,
 			description: "all modes fail (floor(0.8/1.0)=0), all standby",
 		},
 		{
-			name: "miners_power_limit caps effective limit below solar",
+			name:      "miners_power_limit caps effective limit below solar",
 			numMiners: 5, hourlyPrice: 50, priceLimit: 0.1, solar: 100, powerLimit: 3.0,
 			want:        1*2.0 + 4*0.1,
 			description: "effectiveLimit=min(100,3)=3, Super: floor(3/2)=1",
@@ -541,6 +545,144 @@ func TestEstimateLoadForecast_TableDriven(t *testing.T) {
 				t.Errorf("%s: expected %.4f, got %.4f", tc.description, tc.want, got)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Solar forecast / weather nil-safety (MET Norway unavailable)
+// ---------------------------------------------------------------------------
+
+// TestGetWeatherDataAtTime_NilForecast verifies that getWeatherDataAtTime returns
+// zero values and does not panic when the MET Norway forecast is nil.
+func TestGetWeatherDataAtTime_NilForecast(t *testing.T) {
+	s := newMPCTestScheduler(baseConfig(), 0)
+
+	cloudCoverage, weatherSymbol, airTemperature := s.getWeatherDataAtTime(nil, time.Now())
+
+	if cloudCoverage != 0 {
+		t.Errorf("expected cloudCoverage 0, got %.2f", cloudCoverage)
+	}
+	if weatherSymbol != "" {
+		t.Errorf("expected empty weatherSymbol, got %q", weatherSymbol)
+	}
+	if airTemperature != 0 {
+		t.Errorf("expected airTemperature 0, got %.2f", airTemperature)
+	}
+}
+
+// TestGetSolarForecast_NilWeatherForecast_UsesOpenMeteo verifies that when the
+// MET Norway weather forecast is unavailable (nil) but Open-Meteo irradiance data
+// is in the cache, getSolarForecast still returns non-zero solar power estimates
+// and does not return an error.
+func TestGetSolarForecast_NilWeatherForecast_UsesOpenMeteo(t *testing.T) {
+	cfg := &Config{
+		MaxSolarPower:      10.0,
+		CheckPriceInterval: 15 * time.Minute,
+		Latitude:           52.0,
+		Longitude:          5.0,
+	}
+	s := newMPCTestScheduler(cfg, 0)
+
+	// Build a synthetic Open-Meteo response covering 36+ hours at 15-minute resolution.
+	// All data points carry a shortwave radiation of 600 W/m², which should produce
+	// 10.0 kW * (600/1000) = 6.0 kW per slot.
+	const shortwaveRadiation = 600.0
+	now := time.Now().UTC().Truncate(15 * time.Minute)
+	numPoints := 36*4 + 8 // a few extra points beyond the 36-hour horizon
+	times := make([]string, numPoints)
+	radiation := make([]float64, numPoints)
+	for i := range numPoints {
+		times[i] = now.Add(time.Duration(i) * 15 * time.Minute).Format("2006-01-02T15:04")
+		radiation[i] = shortwaveRadiation
+	}
+	s.solarForecastCache.Set(&openmeteo.SolarForecast{
+		Minutely15: &openmeteo.TimeSeriesData{
+			Time:                   times,
+			ShortwaveRadiation:     radiation,
+			DirectRadiation:        radiation,
+			DiffuseRadiation:       radiation,
+			DirectNormalIrradiance: radiation,
+		},
+	})
+
+	// Call getSolarForecast with a nil MET Norway forecast — simulating an outage.
+	solarForecasts, weatherData, err := s.getSolarForecast(cfg, now, 15*time.Minute, nil, nil)
+
+	if err != nil {
+		t.Fatalf("expected no error when MET Norway is nil but Open-Meteo data is available, got: %v", err)
+	}
+	if solarForecasts == nil {
+		t.Fatal("expected non-nil solarForecasts map")
+	}
+	if weatherData == nil {
+		t.Fatal("expected non-nil weatherData map")
+	}
+
+	numSlots := int(36 * time.Hour / (15 * time.Minute))
+	expectedSolar := cfg.MaxSolarPower * (shortwaveRadiation / 1000.0) // 6.0 kW
+
+	// Slot 0 is always overridden with the current PV reading (0 when plantInfo is nil).
+	// Every other slot should carry the irradiance-derived value.
+	for i := 1; i < numSlots; i++ {
+		got := solarForecasts[i]
+		if got != expectedSolar {
+			t.Errorf("slot %d: expected solar %.2f kW, got %.2f kW", i, expectedSolar, got)
+			break // report only the first mismatch to keep output concise
+		}
+	}
+
+	// Weather metadata must be zero/empty — no MET Norway data was available.
+	for i := range numSlots {
+		wd := weatherData[i]
+		if wd.CloudCoverage != 0 || wd.WeatherSymbol != "" || wd.AirTemperature != 0 {
+			t.Errorf("slot %d: expected zero weather metadata without MET Norway, got %+v", i, wd)
+			break
+		}
+	}
+}
+
+// TestGetSolarForecast_NilWeatherForecast_NilOpenMeteo verifies that when both
+// MET Norway and Open-Meteo are unavailable getSolarForecast does not panic and
+// returns all-zero solar forecasts without an error.
+func TestGetSolarForecast_NilWeatherForecast_NilOpenMeteo(t *testing.T) {
+	cfg := &Config{
+		MaxSolarPower:      10.0,
+		CheckPriceInterval: 15 * time.Minute,
+		Latitude:           52.0,
+		Longitude:          5.0,
+	}
+	s := newMPCTestScheduler(cfg, 0)
+
+	// Point the scheduler at a fake Open-Meteo server that always returns 503 so
+	// the fetch fails deterministically regardless of internet connectivity.
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+	}))
+	defer fakeServer.Close()
+	s.openMeteoBaseURL = fakeServer.URL
+
+	now := time.Now().UTC().Truncate(15 * time.Minute)
+
+	// The function must not panic and must not return an error.
+	solarForecasts, weatherData, err := s.getSolarForecast(cfg, now, 15*time.Minute, nil, nil)
+
+	if err != nil {
+		t.Fatalf("expected no error when both forecasts are unavailable, got: %v", err)
+	}
+	if solarForecasts == nil {
+		t.Fatal("expected non-nil solarForecasts map")
+	}
+	if weatherData == nil {
+		t.Fatal("expected non-nil weatherData map")
+	}
+
+	// With no data source available every slot must be zero.
+	numSlots := int(36 * time.Hour / (15 * time.Minute))
+	for i := range numSlots {
+		if v := solarForecasts[i]; v != 0 {
+			t.Errorf("slot %d: expected 0 kW with no data available, got %.2f kW", i, v)
+			break
+		}
 	}
 }
 

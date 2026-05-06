@@ -55,15 +55,15 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 	timeSlotDuration := config.CheckPriceInterval.Hours()
 
 	systemConfig := mpc.SystemConfig{
-		BatteryCapacity:             config.BatteryCapacity,
-		BatteryMaxCharge:            config.BatteryMaxCharge,
-		BatteryMaxDischarge:         config.BatteryMaxDischarge,
-		BatteryMinSOC:               config.BatteryMinSOC,
-		BatteryMaxSOC:               config.BatteryMaxSOC,
-		BatteryEfficiency:           config.BatteryEfficiency,
-		BatteryDegradationCost:      config.BatteryDegradationCost,
-		MaxGridImport:               config.MaxGridImport,
-		MaxGridExport:               config.MaxGridExport,
+		BatteryCapacity:                  config.BatteryCapacity,
+		BatteryMaxCharge:                 config.BatteryMaxCharge,
+		BatteryMaxDischarge:              config.BatteryMaxDischarge,
+		BatteryMinSOC:                    config.BatteryMinSOC,
+		BatteryMaxSOC:                    config.BatteryMaxSOC,
+		BatteryEfficiency:                config.BatteryEfficiency,
+		BatteryDegradationCost:           config.BatteryDegradationCost,
+		MaxGridImport:                    config.MaxGridImport,
+		MaxGridExport:                    config.MaxGridExport,
 		BatteryPreHeatPower:              config.BatteryPreHeatPower,
 		BatteryPreHeatTempThreshold:      config.BatteryPreHeatTempThreshold,
 		BatteryThermalTimeConstant:       config.BatteryThermalTimeConstant,
@@ -177,14 +177,12 @@ func (s *MinerScheduler) buildMPCForecast(ctx context.Context, config *Config, p
 	// Pre-compute solar and weather forecasts at slotDuration resolution
 	var solarForecasts map[int]float64
 	var weatherData map[int]WeatherData
-	if weatherForecast != nil {
-		solarForecasts, weatherData, err = s.getSolarForecast(config, now, slotDuration, weatherForecast, plantInfo)
-		if err != nil {
-			s.logger.Printf("Warning: failed to get solar forecast: %v, using zero solar", err)
-			solarForecasts = make(map[int]float64)
-			weatherData = make(map[int]WeatherData)
-		}
-	} else {
+	// getSolarForecast tolerates a nil weatherForecast: Open-Meteo irradiance data is fetched
+	// independently. Weather metadata (cloud coverage, symbol, temperature) will be zero/empty
+	// when MET Norway is unavailable, but solar power estimates are still produced from Open-Meteo.
+	solarForecasts, weatherData, err = s.getSolarForecast(config, now, slotDuration, weatherForecast, plantInfo)
+	if err != nil {
+		s.logger.Printf("Warning: failed to get solar forecast: %v, using zero solar", err)
 		solarForecasts = make(map[int]float64)
 		weatherData = make(map[int]WeatherData)
 	}
@@ -243,13 +241,11 @@ type WeatherData struct {
 }
 
 // getSolarForecast gets solar power forecast using Open-Meteo irradiance data at slotDuration resolution.
-// Weather metadata (cloud coverage, symbol, temperature) is still sourced from the MET Norway forecast.
-// Falls back to weather-based estimation if the Open-Meteo forecast is unavailable.
+// Weather metadata (cloud coverage, symbol, temperature) is sourced from the MET Norway forecast when
+// available; if weatherForecast is nil (e.g. MET Norway is unreachable) the metadata fields default to
+// zero/empty but the Open-Meteo irradiance data is still used for the solar power estimate.
+// Falls back to sun-angle + cloud-based estimation if the Open-Meteo forecast is also unavailable.
 func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, slotDuration time.Duration, weatherForecast *meteo.METJSONForecast, plantInfo *sigenergy.PlantRunningInfo) (map[int]float64, map[int]WeatherData, error) {
-	if weatherForecast == nil || weatherForecast.Properties == nil {
-		return nil, nil, fmt.Errorf("invalid weather forecast data")
-	}
-
 	// Get current PV power to detect if panels are already covered by snow
 	currentPVPower := 0.0
 	if plantInfo != nil {
@@ -338,6 +334,9 @@ func (s *MinerScheduler) getOrFetchSolarForecast(config *Config) (*openmeteo.Sol
 
 	// Fetch new forecast from Open-Meteo
 	client := openmeteo.NewClient()
+	if s.openMeteoBaseURL != "" {
+		client.SetBaseURL(s.openMeteoBaseURL)
+	}
 
 	forecast, err := client.GetSolarForecast(openmeteo.QueryParams{
 		Location: openmeteo.Location{
@@ -359,7 +358,7 @@ func (s *MinerScheduler) getOrFetchSolarForecast(config *Config) (*openmeteo.Sol
 // getWeatherDataAtTime extracts cloud coverage, weather symbol, and air temperature
 // from the MET Norway forecast for a given time.
 func (s *MinerScheduler) getWeatherDataAtTime(forecast *meteo.METJSONForecast, targetTime time.Time) (cloudCoverage float64, weatherSymbol string, airTemperature float64) {
-	if forecast.Properties == nil || len(forecast.Properties.Timeseries) == 0 {
+	if forecast == nil || forecast.Properties == nil || len(forecast.Properties.Timeseries) == 0 {
 		return 0, "", 0
 	}
 
@@ -442,7 +441,7 @@ func (s *MinerScheduler) estimateSolarPowerFromWeather(forecast *meteo.METJSONFo
 	weatherSymbol := ""
 	airTemperature := 0.0
 
-	if forecast.Properties == nil || len(forecast.Properties.Timeseries) == 0 {
+	if forecast == nil || forecast.Properties == nil || len(forecast.Properties.Timeseries) == 0 {
 		return 0, cloudCoverage, weatherSymbol, airTemperature
 	}
 
@@ -668,10 +667,10 @@ func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64) batte
 		// battery reactively to cover actual load only, preventing unwanted export.
 		if decision.GridExport < 0.01 && decision.LoadForecast <= decision.BatteryDischarge {
 			return batteryAction{
-				mode:   2,
+				mode:           2,
 				setDischarge:   true,
 				dischargeLimit: decision.BatteryDischarge,
-				logMsg: fmt.Sprintf("Setting battery to DISCHARGE mode (self-consumption, export price non-positive — using Mode 2 to prevent grid export): %.1f kW", decision.BatteryDischarge),
+				logMsg:         fmt.Sprintf("Setting battery to DISCHARGE mode (self-consumption, export price non-positive — using Mode 2 to prevent grid export): %.1f kW", decision.BatteryDischarge),
 			}
 		}
 		// Mode 5: Command discharging (PV first).
