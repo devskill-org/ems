@@ -208,6 +208,39 @@ func (d *DataSamples) GetLatestPower() float64 {
 	return d.samples[len(d.samples)-1].pvPower
 }
 
+// AveragePVPowerLast returns the mean PV power across all samples collected within
+// the given window ending at now. This smooths out transient dips caused by a cloud
+// passing over the panels for a minute or two.
+//
+// Falls back to the most recent single reading when no samples fall within the window
+// (e.g. on startup before enough data has been collected), preserving the previous
+// behaviour.  Returns 0 when the buffer is completely empty.
+func (d *DataSamples) AveragePVPowerLast(window time.Duration) float64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if len(d.samples) == 0 {
+		return 0
+	}
+
+	cutoff := time.Now().Add(-window)
+	sum := 0.0
+	count := 0
+	for _, s := range d.samples {
+		if !s.ts.Before(cutoff) {
+			sum += s.pvPower
+			count++
+		}
+	}
+
+	if count == 0 {
+		// No samples inside the window yet — fall back to the most recent reading.
+		return d.samples[len(d.samples)-1].pvPower
+	}
+
+	return sum / float64(count)
+}
+
 func (s *MinerScheduler) runDataPoll(ctx context.Context, samples *DataSamples) error {
 	if s.config.PlantModbusAddress == "" {
 		return nil

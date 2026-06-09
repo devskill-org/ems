@@ -293,8 +293,16 @@ func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, slotDur
 		}
 	}
 
-	// Override slot 0 with actual current PV power reading
-	solarForecast[0] = currentPVPower
+	// Override slot 0 with a short rolling average of recent PV readings.
+	// A single instantaneous sample can be near zero if a cloud passes at the
+	// exact moment the MPC optimization runs, causing the optimizer to pull from
+	// the grid for the entire slot even though the day is otherwise sunny.
+	// Averaging the last 5 minutes of samples (≈30 readings at the default 10 s
+	// poll interval) smooths out these transient dips while still tracking genuine
+	// sustained low-irradiance conditions.  Falls back to the latest single reading
+	// when the buffer has no samples within that window (e.g. on startup).
+	const pvSmoothingWindow = 5 * time.Minute
+	solarForecast[0] = s.dataSamples.AveragePVPowerLast(pvSmoothingWindow)
 
 	return solarForecast, weatherData, nil
 }

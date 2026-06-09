@@ -124,6 +124,9 @@ type MinerScheduler struct {
 	// Solar irradiance forecast cache (Open-Meteo)
 	solarForecastCache SolarForecastCache
 
+	// Data samples collected by the polling task (shared across tasks)
+	dataSamples *DataSamples
+
 	// MPC optimization results
 	mpcDecisions         []mpc.ControlDecision
 	lastExecutedDecision *mpc.ControlDecision // Tracks the last successfully executed decision
@@ -155,6 +158,7 @@ func NewMinerScheduler(config *Config, logger *log.Logger) *MinerScheduler {
 		config:            config,
 		stopChan:          make(chan struct{}),
 		logger:            logger,
+		dataSamples:       &DataSamples{},
 		xmlCache:          entsoe.NewXMLDocumentCache(),
 		dataServiceClient: newDataServiceClient(config),
 		weatherCache: WeatherForecastCache{
@@ -242,7 +246,7 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 	config := s.GetConfig()
 
 	// Data integration state
-	dataSamples := &DataSamples{}
+	dataSamples := s.dataSamples
 	var dataDB *sql.DB
 	var dataDBErr error
 	if s.config.PostgresConnString != "" {

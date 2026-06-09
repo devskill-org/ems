@@ -282,3 +282,80 @@ func abs(x float64) float64 {
 	}
 	return x
 }
+
+func TestDataSamples_AveragePVPowerLast_Empty(t *testing.T) {
+	samples := &DataSamples{}
+	result := samples.AveragePVPowerLast(5 * time.Minute)
+	if result != 0 {
+		t.Errorf("expected 0 for empty buffer, got %.2f", result)
+	}
+}
+
+func TestDataSamples_AveragePVPowerLast_AllInWindow(t *testing.T) {
+	samples := &DataSamples{}
+	now := time.Now()
+
+	// Three readings within the last 5 minutes: 6, 8, 10 kW → avg 8
+	samples.AddSample(6.0, 0, 0, 0, 80, 25, now.Add(-4*time.Minute))
+	samples.AddSample(8.0, 0, 0, 0, 80, 25, now.Add(-2*time.Minute))
+	samples.AddSample(10.0, 0, 0, 0, 80, 25, now.Add(-30*time.Second))
+
+	result := samples.AveragePVPowerLast(5 * time.Minute)
+	if abs(result-8.0) > 0.001 {
+		t.Errorf("expected average 8.0, got %.4f", result)
+	}
+}
+
+func TestDataSamples_AveragePVPowerLast_SmoothsCloudDip(t *testing.T) {
+	// Simulates a sunny day where a cloud blocks the sun for one reading.
+	// Previous readings: 10 kW; cloud dip: 0.5 kW; all within 5-minute window.
+	// The average should be well above the instantaneous dip.
+	samples := &DataSamples{}
+	now := time.Now()
+
+	for i := range 4 {
+		samples.AddSample(10.0, 0, 0, 0, 80, 25, now.Add(-time.Duration(4-i)*time.Minute))
+	}
+	// Cloud dip: most recent reading is very low
+	samples.AddSample(0.5, 0, 0, 0, 80, 25, now.Add(-10*time.Second))
+
+	result := samples.AveragePVPowerLast(5 * time.Minute)
+
+	// Average of [10, 10, 10, 10, 0.5] = 8.1; must be much higher than 0.5
+	if result <= 5.0 {
+		t.Errorf("cloud dip not smoothed: expected average > 5.0, got %.4f", result)
+	}
+}
+
+func TestDataSamples_AveragePVPowerLast_FallbackToLatestWhenNoneInWindow(t *testing.T) {
+	// All samples are older than the window — should fall back to most recent.
+	samples := &DataSamples{}
+	now := time.Now()
+
+	samples.AddSample(5.0, 0, 0, 0, 80, 25, now.Add(-10*time.Minute))
+	samples.AddSample(7.0, 0, 0, 0, 80, 25, now.Add(-8*time.Minute))
+
+	result := samples.AveragePVPowerLast(5 * time.Minute)
+
+	// No samples within 5-minute window → fall back to most recent reading (7.0)
+	if abs(result-7.0) > 0.001 {
+		t.Errorf("expected fallback to most recent reading 7.0, got %.4f", result)
+	}
+}
+
+func TestDataSamples_AveragePVPowerLast_MixedWindowBoundary(t *testing.T) {
+	// One sample just outside the window, two inside — only in-window samples averaged.
+	samples := &DataSamples{}
+	now := time.Now()
+
+	samples.AddSample(100.0, 0, 0, 0, 80, 25, now.Add(-6*time.Minute)) // outside 5-min window
+	samples.AddSample(4.0, 0, 0, 0, 80, 25, now.Add(-3*time.Minute))   // inside
+	samples.AddSample(6.0, 0, 0, 0, 80, 25, now.Add(-1*time.Minute))   // inside
+
+	result := samples.AveragePVPowerLast(5 * time.Minute)
+
+	// Average of [4.0, 6.0] = 5.0; the 100 kW outlier must not be included
+	if abs(result-5.0) > 0.001 {
+		t.Errorf("expected average 5.0 (in-window only), got %.4f", result)
+	}
+}
