@@ -638,15 +638,41 @@ type batteryAction struct {
 
 // decideBatteryAction translates an MPC control decision into a concrete battery
 // action without any side-effects, making the mapping easy to read and test.
-func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64) batteryAction {
+//
+// recentAvgPV is the short-term average PV output (kW) measured just before
+// execution.  When it is high enough to cover the load plus the full planned
+// charge rate, grid charging is suppressed and the inverter is switched to
+// PV-only self-use mode instead.  Pass 0 to disable the gate (e.g. in tests
+// that are not exercising the cloud-recovery logic).
+func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recentAvgPV float64) batteryAction {
 	switch {
 	case decision.BatteryChargeFromGrid > 0.01:
+		totalPlannedCharge := decision.BatteryChargeFromPV + decision.BatteryChargeFromGrid
+
+		// PV recovery gate: the MPC may have planned grid charging because it
+		// observed low solar at optimisation time (a cloud was passing).  If
+		// actual PV is now high enough to cover both the load and the full
+		// planned charge, the cloud has cleared and the grid import is no longer
+		// needed.  Switch to Mode 2 (PV self-use) so the battery still charges
+		// at the planned rate but entirely from solar.
+		if recentAvgPV >= decision.LoadForecast+totalPlannedCharge {
+			limit := math.Min(totalPlannedCharge, maxCharge)
+			return batteryAction{
+				mode:        2,
+				chargeLimit: limit,
+				setCharge:   true,
+				logMsg: fmt.Sprintf(
+					"Grid charging suppressed (PV recovery): recent PV %.1f kW >= load %.1f kW + planned charge %.1f kW; switching to PV-only mode, limit %.1f kW",
+					recentAvgPV, decision.LoadForecast, totalPlannedCharge, limit),
+			}
+		}
+
 		// Mode 4: Command charging (PV first, then grid).
 		// The charge limit must be the total desired charge rate so that the
 		// inverter can draw from both PV surplus and the grid to reach it.
 		// Clamp to maxCharge: the inverter rejects any value above the
 		// hardware-rated maximum with a Modbus illegal-data-address exception.
-		limit := math.Min(decision.BatteryChargeFromPV+decision.BatteryChargeFromGrid, maxCharge)
+		limit := math.Min(totalPlannedCharge, maxCharge)
 		return batteryAction{
 			mode:        4,
 			chargeLimit: limit,
@@ -737,7 +763,14 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	}
 	s.logger.Printf("Enabled Remote EMS control")
 
-	action := decideBatteryAction(decision, config.BatteryMaxCharge)
+	// Get recent average PV power for the grid-charging gate.  A 5-minute
+	// window covers ~30 readings at the default 10 s poll interval and is
+	// long enough to distinguish a sustained cloud-free period from a brief
+	// spike.  Falls back to 0 (gate disabled) when no samples are available.
+	const pvGateWindow = 5 * time.Minute
+	recentAvgPV := s.dataSamples.AveragePVPowerLast(pvGateWindow)
+
+	action := decideBatteryAction(decision, config.BatteryMaxCharge, recentAvgPV)
 	s.logger.Print(action.logMsg)
 
 	if err := client.SetRemoteEMSMode(action.mode); err != nil {

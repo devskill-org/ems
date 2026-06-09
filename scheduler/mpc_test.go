@@ -697,7 +697,7 @@ func TestDecideBatteryAction_DischargeNegativeExportUsesMode2(t *testing.T) {
 		BatteryChargeFromGrid: 0,
 		BatteryChargeFromPV:   0,
 	}
-	action := decideBatteryAction(decision, 5.0)
+	action := decideBatteryAction(decision, 5.0, 0.0)
 	if action.mode != 2 {
 		t.Errorf("expected mode 2, got %d", action.mode)
 	}
@@ -713,7 +713,7 @@ func TestDecideBatteryAction_DischargeZeroExportUsesMode2(t *testing.T) {
 		BatteryChargeFromGrid: 0,
 		BatteryChargeFromPV:   0,
 	}
-	action := decideBatteryAction(decision, 5.0)
+	action := decideBatteryAction(decision, 5.0, 0.0)
 	if action.mode != 2 {
 		t.Errorf("expected mode 2, got %d", action.mode)
 	}
@@ -732,7 +732,7 @@ func TestDecideBatteryAction_DischargeWithPlannedGridExportUsesMode5(t *testing.
 		BatteryChargeFromGrid: 0,
 		BatteryChargeFromPV:   0,
 	}
-	action := decideBatteryAction(decision, 5.0)
+	action := decideBatteryAction(decision, 5.0, 0.0)
 	if action.mode != 5 {
 		t.Errorf("expected mode 5, got %d", action.mode)
 	}
@@ -741,5 +741,101 @@ func TestDecideBatteryAction_DischargeWithPlannedGridExportUsesMode5(t *testing.
 	}
 	if action.dischargeLimit != 3.0 {
 		t.Errorf("expected dischargeLimit 3.0, got %.2f", action.dischargeLimit)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PV recovery gate tests (grid charging suppression when cloud clears)
+// ---------------------------------------------------------------------------
+
+// TestDecideBatteryAction_GridCharge_GateSuppressesWhenPVCoversAll verifies that
+// when recent PV is high enough to cover load + full planned charge, the gate
+// fires and switches from Mode 4 (grid+PV) to Mode 2 (PV-only).
+func TestDecideBatteryAction_GridCharge_GateSuppressesWhenPVCoversAll(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryChargeFromPV:   2.0,
+		BatteryChargeFromGrid: 3.0,
+		LoadForecast:          4.0,
+	}
+	// recentAvgPV = 9.0 >= load(4.0) + charge(5.0) → gate fires
+	action := decideBatteryAction(decision, 12.0, 9.0)
+
+	if action.mode != 2 {
+		t.Errorf("expected mode 2 (PV-only) after gate, got %d", action.mode)
+	}
+	if !action.setCharge {
+		t.Errorf("expected setCharge true")
+	}
+	// Limit must equal the full planned charge (PV + grid portions)
+	if action.chargeLimit != 5.0 {
+		t.Errorf("expected chargeLimit 5.0 (full planned charge), got %.2f", action.chargeLimit)
+	}
+}
+
+// TestDecideBatteryAction_GridCharge_GateDoesNotFireWhenPVInsufficient verifies
+// that the gate does NOT fire when recent PV is below the load + charge threshold,
+// preserving Mode 4 (grid + PV) charging.
+func TestDecideBatteryAction_GridCharge_GateDoesNotFireWhenPVInsufficient(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryChargeFromPV:   2.0,
+		BatteryChargeFromGrid: 3.0,
+		LoadForecast:          4.0,
+	}
+	// recentAvgPV = 8.9 < load(4.0) + charge(5.0) = 9.0 → gate must NOT fire
+	action := decideBatteryAction(decision, 12.0, 8.9)
+
+	if action.mode != 4 {
+		t.Errorf("expected mode 4 (grid+PV) when PV insufficient, got %d", action.mode)
+	}
+}
+
+// TestDecideBatteryAction_GridCharge_GateDoesNotFireWhenRecentPVIsZero verifies
+// that passing recentAvgPV=0 (no samples / startup) never triggers the gate.
+func TestDecideBatteryAction_GridCharge_GateDoesNotFireWhenRecentPVIsZero(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryChargeFromPV:   1.0,
+		BatteryChargeFromGrid: 2.0,
+		LoadForecast:          0.0,
+	}
+	// recentAvgPV = 0 → gate must NOT fire even though load is also 0
+	action := decideBatteryAction(decision, 12.0, 0.0)
+
+	if action.mode != 4 {
+		t.Errorf("expected mode 4 when recentAvgPV is 0, got %d", action.mode)
+	}
+}
+
+// TestDecideBatteryAction_GridCharge_GateAtExactThreshold verifies the gate fires
+// at exactly the threshold (>=, not >).
+func TestDecideBatteryAction_GridCharge_GateAtExactThreshold(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryChargeFromPV:   1.0,
+		BatteryChargeFromGrid: 2.0,
+		LoadForecast:          3.0,
+	}
+	// threshold = load(3.0) + charge(3.0) = 6.0; pass exactly 6.0 → gate fires
+	action := decideBatteryAction(decision, 12.0, 6.0)
+
+	if action.mode != 2 {
+		t.Errorf("expected mode 2 at exact threshold, got %d", action.mode)
+	}
+}
+
+// TestDecideBatteryAction_GridCharge_LimitClampedToMaxCharge verifies that when
+// the gate fires and the planned charge exceeds maxCharge, the limit is clamped.
+func TestDecideBatteryAction_GridCharge_LimitClampedToMaxCharge(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryChargeFromPV:   4.0,
+		BatteryChargeFromGrid: 5.0, // total = 9.0, above maxCharge
+		LoadForecast:          1.0,
+	}
+	// recentAvgPV = 10.0 >= load(1.0) + charge(9.0) → gate fires
+	action := decideBatteryAction(decision, 8.0, 10.0) // maxCharge = 8.0
+
+	if action.mode != 2 {
+		t.Errorf("expected mode 2, got %d", action.mode)
+	}
+	if action.chargeLimit != 8.0 {
+		t.Errorf("expected chargeLimit clamped to maxCharge 8.0, got %.2f", action.chargeLimit)
 	}
 }
