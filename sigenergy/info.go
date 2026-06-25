@@ -103,6 +103,9 @@ func ShowPlantInfo(ctx context.Context, plantModbusAddress string, dcChargerSlav
 	// DC Charger Information
 	fmt.Println("DC CHARGER")
 	fmt.Println("--------------------------------------------------")
+	fmt.Printf("  Cable Connected:                %s\n", getEVPluggedInStatus(info.EVPluggedIn))
+	fmt.Printf("  Vehicle Battery Voltage:        %.1f V\n", info.DCChargerVehicleVoltage)
+	fmt.Printf("  Charging Current:               %.1f A\n", info.DCChargerChargingCurrent)
 	fmt.Printf("  Output Power:                   %.3f kW\n", info.DCChargerOutputPower)
 	fmt.Printf("  Vehicle SOC:                    %.1f %%\n", info.DCChargerVehicleSOC)
 	fmt.Println()
@@ -170,4 +173,11 @@ func getESSPowerStatus(power float64) string {
 		return "(Charging)"
 	}
 	return "(Idle)"
+}
+
+func getEVPluggedInStatus(pluggedIn bool) string {
+	if pluggedIn {
+		return "Yes"
+	}
+	return "No"
 }

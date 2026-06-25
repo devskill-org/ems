@@ -40,8 +40,19 @@ type PlantRunningInfo struct {
 	ESSDischargeOffSOC              float64 // %
 	ESSSOH                          float64 // %
 	ESSAvgCellTemperature           float64 // °C
-	DCChargerOutputPower            float64 // kW
-	DCChargerVehicleSOC             float64 // %
+	DCChargerVehicleVoltage         float64 // V  (register 31500) — ≥ evPluggedInVoltageThreshold whenever a vehicle is physically connected
+	DCChargerChargingCurrent        float64 // A  (register 31501)
+	DCChargerOutputPower            float64 // kW (register 31502)
+	DCChargerVehicleSOC             float64 // %  (register 31504)
+	// EVPluggedIn is true when the DC charger reports a vehicle battery voltage
+	// at or above evPluggedInVoltageThreshold, indicating a cable is physically
+	// connected regardless of whether power is currently flowing.  A hard
+	// threshold (rather than > 0) is used because the DC bus retains a small
+	// residual charge (~1–2 V) after cable removal due to capacitor discharge,
+	// which would otherwise produce a false "plugged in" reading.  Any real EV
+	// battery presents at least 100 V on the DC bus, so a 10 V floor cleanly
+	// separates genuine connections from noise.
+	EVPluggedIn bool
 }
 
 // ReadPlantRunningInfo reads plant running information (slave address 247).
@@ -99,17 +110,34 @@ func (c *SigenModbusClient) ReadPlantRunningInfo(dcChargerSlaveID byte) (*PlantR
 	}
 
 	// Read DC Charger and ESS cell temperature from first inverter (slave address 1)
-	// Registers 31502-31504 are Hybrid Inverter registers (section 5.3) and only respond
+	// Registers 31500-31504 are Hybrid Inverter registers (section 5.3) and only respond
 	// to slave addresses 1-246, NOT the plant address 247.
 	// Note: This assumes at least one hybrid inverter is present with slave ID 1
 	c.SetSlaveID(dcChargerSlaveID)
 
-	// Read DC Charger data (31502-31504)
-	data3, err := c.client.ReadInputRegisters(31502, 3)
-	if err == nil {
-		info.DCChargerOutputPower = float64(bytesToS32(data3[0:4])) / 1000.0
-		info.DCChargerVehicleSOC = float64(bytesToU16(data3[4:6])) / 10.0
+	// Read DC Charger data (31500-31504): vehicle voltage, charging current, output
+	// power (2 registers), and vehicle SOC — 5 registers total.
+	// Register 31500 (vehicle battery voltage) is non-zero whenever a cable is
+	// physically connected to a vehicle, even when power flow is zero (BMS pause,
+	// thermal hold, negotiation phase, or fully charged battery).
+	// On read error we propagate the failure instead of leaving the fields at zero,
+	// so the caller can distinguish "read succeeded, no vehicle" from "read failed".
+	data3, err := c.client.ReadInputRegisters(31500, 5)
+	if err != nil {
+		c.SetSlaveID(PlantAddress)
+		return nil, fmt.Errorf("failed to read DC charger registers: %w", err)
 	}
+	info.DCChargerVehicleVoltage  = float64(bytesToU16(data3[0:2])) / 10.0
+	info.DCChargerChargingCurrent = float64(bytesToU16(data3[2:4])) / 10.0
+	info.DCChargerOutputPower     = float64(bytesToS32(data3[4:8])) / 1000.0
+	info.DCChargerVehicleSOC      = float64(bytesToU16(data3[8:10])) / 10.0
+	// evPluggedInVoltageThreshold is the minimum vehicle battery voltage (V)
+	// treated as evidence of a physical cable connection.  The DC bus retains a
+	// small residual charge after disconnection (~1–2 V from capacitor bleed-off);
+	// a real EV battery always presents ≥ 100 V, so 10 V cleanly separates
+	// genuine connections from post-disconnect noise.
+	const evPluggedInVoltageThreshold = 10.0
+	info.EVPluggedIn = info.DCChargerVehicleVoltage >= evPluggedInVoltageThreshold
 
 	data4, err := c.client.ReadInputRegisters(30603, 1)
 	if err == nil {

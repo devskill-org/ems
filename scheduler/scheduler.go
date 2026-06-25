@@ -131,6 +131,18 @@ type MinerScheduler struct {
 	mpcDecisions         []mpc.ControlDecision
 	lastExecutedDecision *mpc.ControlDecision // Tracks the last successfully executed decision
 
+	// EV session state — tracks whether a DC charging cable is currently
+	// connected so that the fast-poll path can apply battery support mode
+	// immediately on plug-in without waiting for the next MPC execution tick.
+	evSessionActive     bool // true while an EV cable is confirmed connected
+	evSessionClearCount int  // consecutive zero-voltage readings since last plug-in
+
+	// Last inverter control values written via Remote EMS so we can skip
+	// redundant Modbus writes when nothing has changed.
+	lastWrittenMode           uint16
+	lastWrittenChargeLimit    float64
+	lastWrittenDischargeLimit float64
+
 	// Web server
 	webServer *WebServer
 
@@ -333,6 +345,14 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			interval:     config.PVPollInterval,
 			runFunc: func() error {
 				return s.runDataPoll(ctx, dataSamples)
+			},
+		},
+		{
+			name:         "EVControl",
+			initialDelay: 0, // Run immediately so the first poll catches a cable already connected on startup
+			interval:     config.PVPollInterval,
+			runFunc: func() error {
+				return s.runEVControl(ctx)
 			},
 		},
 		{

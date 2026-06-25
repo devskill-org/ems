@@ -112,7 +112,7 @@ func DefaultConfig() *Config {
 		MinerTimeout:                     5 * time.Second,
 		HealthCheckPort:                  0,
 		DeviceID:                         0,
-		PVPollInterval:                   10 * time.Second,
+		PVPollInterval:                   5 * time.Second,
 		PVIntegrationPeriod:              15 * time.Minute,
 		PostgresConnString:               "",
 		URLFormat:                        "https://web-api.tp.entsoe.eu/api?documentType=A44&out_Domain=10YLV-1001A00074&in_Domain=10YLV-1001A00074&periodStart=%s&periodEnd=%s&securityToken=%s",

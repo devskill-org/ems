@@ -88,6 +88,7 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 	s.mu.Lock()
 	s.mpcDecisions = decisions
 	s.lastExecutedDecision = nil // Clear last executed decision for new optimization
+	s.lastWrittenMode = 0        // Force re-write of inverter registers after new plan
 	s.mu.Unlock()
 
 	// Step 5.1: Persist decisions to database (only when not in dry run mode)
@@ -297,7 +298,7 @@ func (s *MinerScheduler) getSolarForecast(config *Config, now time.Time, slotDur
 	// A single instantaneous sample can be near zero if a cloud passes at the
 	// exact moment the MPC optimization runs, causing the optimizer to pull from
 	// the grid for the entire slot even though the day is otherwise sunny.
-	// Averaging the last 5 minutes of samples (≈30 readings at the default 10 s
+	// Averaging the last 5 minutes of samples (≈60 readings at the default 5 s
 	// poll interval) smooths out these transient dips while still tracking genuine
 	// sustained low-irradiance conditions.  Falls back to the latest single reading
 	// when the buffer has no samples within that window (e.g. on startup).
@@ -744,27 +745,21 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	}
 	defer client.Close()
 
-	// Check whether an EV is plugged into the DC charger. When it is, the
-	// inverter is already managing power delivery for the fast-charge session
-	// and we must not override its control mode or limits.
-	plantInfo, err := client.ReadPlantRunningInfo(byte(config.DCChargerSlaveID)) //nolint:gosec // SlaveID is expected to be in [0,255] range
-	if err != nil {
-		return fmt.Errorf("failed to read plant info for EV DC-charger check: %w", err)
-	}
-	if plantInfo.DCChargerOutputPower > 0 {
-		s.logger.Printf("Skipping MPC battery control: EV is plugged into DC charger (ChargePower: %.1f kW, VehicleSOC: %.1f%%)",
-			plantInfo.DCChargerOutputPower, plantInfo.DCChargerVehicleSOC)
+	// Check whether an EV session is currently active.  All session state
+	// management (register reads, evSessionActive updates, debounce, and Mode 2
+	// writes) is owned exclusively by runEVControl, which runs at PVPollInterval.
+	// This function only reads the flag — it never writes it.
+	s.mu.RLock()
+	evActive := s.evSessionActive
+	s.mu.RUnlock()
+
+	if evActive {
+		s.logger.Printf("EV session active - MPC battery control deferred to runEVControl")
 		return nil
 	}
 
-	// Enable Remote EMS control
-	if err := client.EnableRemoteEMS(true); err != nil {
-		return fmt.Errorf("failed to enable remote EMS: %w", err)
-	}
-	s.logger.Printf("Enabled Remote EMS control")
-
 	// Get recent average PV power for the grid-charging gate.  A 5-minute
-	// window covers ~30 readings at the default 10 s poll interval and is
+	// window covers ~60 readings at the default 5 s poll interval and is
 	// long enough to distinguish a sustained cloud-free period from a brief
 	// spike.  Falls back to 0 (gate disabled) when no samples are available.
 	const pvGateWindow = 5 * time.Minute
@@ -773,23 +768,66 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	action := decideBatteryAction(decision, config.BatteryMaxCharge, recentAvgPV)
 	s.logger.Print(action.logMsg)
 
-	if err := client.SetRemoteEMSMode(action.mode); err != nil {
-		return fmt.Errorf("failed to set remote EMS mode: %w", err)
-	}
-	if action.setCharge {
-		if err := client.SetESSMaxChargingLimit(action.chargeLimit); err != nil {
-			return fmt.Errorf("failed to set ESS charging limit: %w", err)
-		}
-	}
-	if action.setDischarge {
-		if err := client.SetESSMaxDischargingLimit(action.dischargeLimit); err != nil {
-			return fmt.Errorf("failed to set ESS discharging limit: %w", err)
-		}
+	if err := s.applyInverterMode(client, action.mode, action.chargeLimit, action.dischargeLimit, action.setCharge, action.setDischarge); err != nil {
+		return err
 	}
 
 	s.logger.Printf("Successfully executed MPC decision - Mode: %d, SOC: %.1f%%, ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW, Discharge: %.1f kW, GridImport: %.1f kW, GridExport: %.1f kW",
 		action.mode, decision.BatterySOC*100, decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, decision.BatteryDischarge, decision.GridImport, decision.GridExport)
 
+	return nil
+}
+
+// applyInverterMode writes Remote EMS enable + mode + charge/discharge limits to
+// the inverter via Modbus.  Writes are suppressed when the values are identical
+// to what was last successfully written, reducing register churn that can disturb
+// the DC charging protocol during an active EV session.
+func (s *MinerScheduler) applyInverterMode(
+	client interface {
+		EnableRemoteEMS(bool) error
+		SetRemoteEMSMode(uint16) error
+		SetESSMaxChargingLimit(float64) error
+		SetESSMaxDischargingLimit(float64) error
+	},
+	mode uint16, chargeLimit, dischargeLimit float64,
+	setCharge, setDischarge bool,
+) error {
+	s.mu.Lock()
+	lastMode := s.lastWrittenMode
+	lastCharge := s.lastWrittenChargeLimit
+	lastDischarge := s.lastWrittenDischargeLimit
+	s.mu.Unlock()
+
+	// Always enable Remote EMS on the first write (lastMode == 0) or when
+	// switching modes, but skip the Modbus call when nothing changed.
+	if lastMode == 0 || lastMode != mode || (setCharge && lastCharge != chargeLimit) || (setDischarge && lastDischarge != dischargeLimit) {
+		if err := client.EnableRemoteEMS(true); err != nil {
+			return fmt.Errorf("failed to enable remote EMS: %w", err)
+		}
+		if err := client.SetRemoteEMSMode(mode); err != nil {
+			return fmt.Errorf("failed to set remote EMS mode: %w", err)
+		}
+		if setCharge {
+			if err := client.SetESSMaxChargingLimit(chargeLimit); err != nil {
+				return fmt.Errorf("failed to set ESS charging limit: %w", err)
+			}
+		}
+		if setDischarge {
+			if err := client.SetESSMaxDischargingLimit(dischargeLimit); err != nil {
+				return fmt.Errorf("failed to set ESS discharging limit: %w", err)
+			}
+		}
+		s.mu.Lock()
+		s.lastWrittenMode = mode
+		if setCharge {
+			s.lastWrittenChargeLimit = chargeLimit
+		}
+		if setDischarge {
+			s.lastWrittenDischargeLimit = dischargeLimit
+		}
+		s.mu.Unlock()
+		s.logger.Printf("Inverter mode applied: mode=%d chargeLimit=%.1f kW dischargeLimit=%.1f kW", mode, chargeLimit, dischargeLimit)
+	}
 	return nil
 }
 

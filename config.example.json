@@ -17,7 +17,7 @@
   "location": "CET",
   "plant_modbus_address": "192.168.1.100:502",
   "device_id": 0,
-  "pv_poll_interval": "10s",
+  "pv_poll_interval": "5s",
   "pv_integration_period": "15m",
   "postgres_conn_string": "<your-neon-connection-string>",
   "battery_capacity": 24.0,
