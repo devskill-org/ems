@@ -143,6 +143,12 @@ type MinerScheduler struct {
 	lastWrittenChargeLimit    float64
 	lastWrittenDischargeLimit float64
 
+	// lastBalancingTime is the Unix timestamp of the most recent observation
+	// where the battery SOC reached BatteryMaxSOC (i.e. a full balancing
+	// charge completed).  0 means it has never been observed.
+	// Updated by RunMPCOptimize whenever ESSSOC >= BatteryMaxSOC.
+	lastBalancingTime int64
+
 	// Web server
 	webServer *WebServer
 
@@ -283,6 +289,18 @@ func (s *MinerScheduler) Start(ctx context.Context, serverOnly bool) error {
 			s.logger.Printf("Loaded %d MPC decisions from data-service on startup", len(decisions))
 			break
 		}
+	}
+
+	// Restore the last balancing timestamp from the metrics DB so the weekly
+	// balancing guard survives process restarts.
+	if lastBalancingTime, err := loadLastBalancingTimeFromDB(ctx, dataDB, config.DeviceID); err != nil {
+		s.logger.Printf("Warning: failed to load last balancing time from DB: %v", err)
+	} else if lastBalancingTime > 0 {
+		s.mu.Lock()
+		s.lastBalancingTime = lastBalancingTime
+		s.mu.Unlock()
+		s.logger.Printf("Loaded last balancing time from DB: %s",
+			time.Unix(lastBalancingTime, 0).Format(time.RFC3339))
 	}
 
 	// Calculate initial delays

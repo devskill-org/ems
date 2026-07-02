@@ -3,6 +3,7 @@ package scheduler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -111,7 +112,29 @@ func (s *MinerScheduler) loadLatestMPCDecisions(ctx context.Context) ([]mpc.Cont
 	return decisions, nil
 }
 
-// loadDecisionsFromReader decodes MPC decisions from an io.Reader.
+// loadLastBalancingTimeFromDB queries the metrics table for the most recent
+// timestamp at which battery_soc reached 100%, returning it as a Unix timestamp.
+// Returns 0 with no error when no such record exists or db is nil.
+func loadLastBalancingTimeFromDB(ctx context.Context, db *sql.DB, deviceID int) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	var ts sql.NullTime
+	err := db.QueryRowContext(ctx,
+		`SELECT MAX(timestamp) FROM metrics
+		 WHERE device_id = $1
+		   AND metric_name = 'energy_flow'
+		   AND battery_soc >= 100.0`,
+		deviceID,
+	).Scan(&ts)
+	if err != nil {
+		return 0, fmt.Errorf("querying last balancing time: %w", err)
+	}
+	if !ts.Valid {
+		return 0, nil // no 100 % SOC row found yet
+	}
+	return ts.Time.Unix(), nil
+}
 func loadDecisionsFromReader(r io.Reader) ([]mpc.ControlDecision, error) {
 	var decisions []mpc.ControlDecision
 	err := json.NewDecoder(r).Decode(&decisions)

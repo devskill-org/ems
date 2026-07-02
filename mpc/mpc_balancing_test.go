@@ -1,7 +1,7 @@
 // Package mpc – cell-balancing feature tests.
 //
 // These tests cover:
-//  1. needsDailyBalancing – the once-per-day guard
+//  1. needsWeeklyBalancing – the once-per-week guard
 //  2. CV-phase energy modelling – reduced efficiency near BatteryMaxSOC
 //  3. Optimizer integration – bonus incentivises full charge, no double-counting
 package mpc
@@ -35,9 +35,9 @@ func balancingConfig() SystemConfig {
 	}
 }
 
-// Anchor timestamps at noon UTC on two consecutive days.
-// Using noon (12:00 UTC) keeps the calendar-day comparison in
-// needsDailyBalancing consistent across all populated timezones (UTC-11 … UTC+11).
+// Anchor timestamps at noon UTC.
+// Using noon (12:00 UTC) keeps time-based comparisons in needsWeeklyBalancing
+// consistent across all populated timezones (UTC-11 … UTC+11).
 //
 // 2024-01-04 00:00:00 UTC = 1704326400 (used by existing tests)
 // 2024-01-04 12:00:00 UTC = 1704326400 + 12*3600 = 1704369600
@@ -73,52 +73,53 @@ func expensiveBalancingSlot(ts int64, hour int) TimeSlot {
 }
 
 // ─── needsDailyBalancing ─────────────────────────────────────────────────────
+// ─── needsWeeklyBalancing ──────────────────────────────────────────────────────────────────────
 
-func TestNeedsDailyBalancing_FeatureDisabled(t *testing.T) {
+func TestNeedsWeeklyBalancing_FeatureDisabled(t *testing.T) {
 	config := balancingConfig()
 	config.BatteryBalancingBonus = 0 // feature off
 
 	ctrl := NewController(config, 1, 0.5)
 	ctrl.LastBalancingTime = 0 // never balanced
 
-	if ctrl.needsDailyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
-		t.Error("needsDailyBalancing must return false when BatteryBalancingBonus is 0")
+	if ctrl.needsWeeklyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
+		t.Error("needsWeeklyBalancing must return false when BatteryBalancingBonus is 0")
 	}
 }
 
-func TestNeedsDailyBalancing_NeverBalanced(t *testing.T) {
+func TestNeedsWeeklyBalancing_NeverBalanced(t *testing.T) {
 	ctrl := NewController(balancingConfig(), 1, 0.5)
 	ctrl.LastBalancingTime = 0 // zero means "never"
 
-	if !ctrl.needsDailyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
-		t.Error("needsDailyBalancing must return true when the battery has never been fully charged")
+	if !ctrl.needsWeeklyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
+		t.Error("needsWeeklyBalancing must return true when the battery has never been fully charged")
 	}
 }
 
-func TestNeedsDailyBalancing_AlreadyBalancedToday(t *testing.T) {
+func TestNeedsWeeklyBalancing_AlreadyBalancedWithinAWeek(t *testing.T) {
 	ctrl := NewController(balancingConfig(), 1, 0.5)
-	ctrl.LastBalancingTime = jan05noon - 2*3600 // 2 h before forecast start, same calendar day
+	ctrl.LastBalancingTime = jan05noon - 6*24*3600 // 6 days before forecast start
 
-	if ctrl.needsDailyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
-		t.Error("needsDailyBalancing must return false when balancing already happened today")
+	if ctrl.needsWeeklyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
+		t.Error("needsWeeklyBalancing must return false when balancing happened less than 7 days ago")
 	}
 }
 
-func TestNeedsDailyBalancing_BalancedYesterday(t *testing.T) {
+func TestNeedsWeeklyBalancing_BalancedExactlyAWeekAgo(t *testing.T) {
 	ctrl := NewController(balancingConfig(), 1, 0.5)
-	ctrl.LastBalancingTime = jan04noon // previous calendar day (24 h before jan05noon)
+	ctrl.LastBalancingTime = jan05noon - 7*24*3600 // exactly 7 days before forecast start
 
-	if !ctrl.needsDailyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
-		t.Error("needsDailyBalancing must return true when last balancing was on a previous day")
+	if !ctrl.needsWeeklyBalancing([]TimeSlot{{Timestamp: jan05noon}}) {
+		t.Error("needsWeeklyBalancing must return true when at least 7 days have elapsed since last balancing")
 	}
 }
 
-func TestNeedsDailyBalancing_EmptyForecast(t *testing.T) {
+func TestNeedsWeeklyBalancing_EmptyForecast(t *testing.T) {
 	ctrl := NewController(balancingConfig(), 0, 0.5)
 	ctrl.LastBalancingTime = 0
 
-	if ctrl.needsDailyBalancing([]TimeSlot{}) {
-		t.Error("needsDailyBalancing must return false for an empty forecast")
+	if ctrl.needsWeeklyBalancing([]TimeSlot{}) {
+		t.Error("needsWeeklyBalancing must return false for an empty forecast")
 	}
 }
 
@@ -321,9 +322,9 @@ func TestOptimizer_BalancingSkippedWhenAlreadyDoneToday(t *testing.T) {
 	ctrlA.LastBalancingTime = 0
 	decisionsA := ctrlA.Optimize(forecast)
 
-	// Run B: balancing already done today → incentive suppressed
+	// Run B: balancing done recently (within 7 days) → incentive suppressed
 	ctrlB := NewController(config, len(forecast), 0.90)
-	ctrlB.LastBalancingTime = jan05noon - 3600 // 1 h before the forecast, same calendar day
+	ctrlB.LastBalancingTime = jan05noon - 3600 // 1 h before the forecast start
 	decisionsB := ctrlB.Optimize(forecast)
 
 	peakA, peakB := 0.0, 0.0

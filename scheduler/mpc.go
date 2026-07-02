@@ -77,6 +77,18 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 	controller := mpc.NewController(systemConfig, horizon, initialSOC)
 	controller.CurrentBatteryTemp = plantInfo.ESSAvgCellTemperature
 
+	// Persist lastBalancingTime across optimization runs.
+	// NewController sets LastBalancingTime when initialSOC >= BatteryMaxSOC;
+	// otherwise fall back to the value remembered from a previous run.
+	s.mu.Lock()
+	if controller.LastBalancingTime > 0 {
+		s.lastBalancingTime = controller.LastBalancingTime
+		s.logger.Printf("Battery at 100%% SOC, updating lastBalancingTime")
+	} else {
+		controller.LastBalancingTime = s.lastBalancingTime
+	}
+	s.mu.Unlock()
+
 	// Step 4: Run optimization
 	decisions := controller.Optimize(forecast)
 	if len(decisions) == 0 {

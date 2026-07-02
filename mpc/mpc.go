@@ -95,14 +95,20 @@ type Controller struct {
 	LastBalancingTime int64
 }
 
-// NewController creates a new MPC controller
+// NewController creates a new MPC controller.
+// If initialSOC is at or above 100%, LastBalancingTime is initialised to the
+// current time so the optimizer knows balancing is already complete.
 func NewController(config SystemConfig, horizon int, initialSOC float64) *Controller {
-	return &Controller{
+	c := &Controller{
 		Config:             config,
 		Horizon:            horizon,
 		CurrentSOC:         initialSOC,
 		CurrentBatteryTemp: 20.0, // Default to room temperature
 	}
+	if initialSOC >= 1.0 {
+		c.LastBalancingTime = time.Now().Unix()
+	}
+	return c
 }
 
 // Optimize finds the optimal control strategy using dynamic programming
@@ -114,8 +120,8 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	}
 
 	// Determine whether cell-balancing (charging to BatteryMaxSOC) should be
-	// incentivised during this optimisation run – at most once per calendar day.
-	needsBalancing := mpc.needsDailyBalancing(forecast)
+	// incentivised during this optimisation run – at most once per calendar week.
+	needsBalancing := mpc.needsWeeklyBalancing(forecast)
 
 	// Run optimization with full solar forecast
 	decisionsWithSolar := mpc.optimizeWithForecast(forecast, true, needsBalancing)
@@ -640,19 +646,18 @@ func (mpc *Controller) isFeasible(dec ControlDecision) bool {
 	return true
 }
 
-// needsDailyBalancing returns true when cell-balancing (charging to BatteryMaxSOC)
+// needsWeeklyBalancing returns true when cell-balancing (charging to BatteryMaxSOC)
 // should be incentivised during this optimisation run.
 //
 // Balancing is needed when ALL of the following hold:
 //   - BatteryBalancingBonus is configured (non-zero) – feature is enabled
-//   - The battery has NOT yet reached BatteryMaxSOC on the same calendar day as
-//     the first slot in the provided forecast
+//   - At least 7 days have elapsed since the last balancing (or it has never happened)
 //
 // The caller is responsible for updating LastBalancingTime whenever the battery
-// is observed to reach BatteryMaxSOC (e.g. in the EMS main loop).
+// is observed to reach 100% SOC (e.g. in the EMS main loop).
 // Setting LastBalancingTime prevents the optimizer from attempting balancing again
-// on the same day, keeping the battery cycle count to a minimum.
-func (mpc *Controller) needsDailyBalancing(forecast []TimeSlot) bool {
+// within the following week, keeping the battery cycle count to a minimum.
+func (mpc *Controller) needsWeeklyBalancing(forecast []TimeSlot) bool {
 	if mpc.Config.BatteryBalancingBonus <= 0 {
 		return false // feature disabled – no bonus configured
 	}
@@ -662,10 +667,7 @@ func (mpc *Controller) needsDailyBalancing(forecast []TimeSlot) bool {
 	if mpc.LastBalancingTime == 0 {
 		return true // battery has never been fully charged for balancing
 	}
-	lastTime := time.Unix(mpc.LastBalancingTime, 0)
-	forecastStart := time.Unix(forecast[0].Timestamp, 0)
-	ly, lm, ld := lastTime.Date()
-	fy, fm, fd := forecastStart.Date()
-	// Balancing is needed when the last balancing did NOT occur on the same calendar day.
-	return ly != fy || lm != fm || ld != fd
+	const week = int64(7 * 24 * 3600)
+	// Balancing is needed once at least a full week has passed since the last one.
+	return forecast[0].Timestamp-mpc.LastBalancingTime >= week
 }
