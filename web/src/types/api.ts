@@ -17,6 +17,7 @@ export interface EmsConfig {
   fanr_high_threshold: number;
   fanr_low_threshold: number;
   miner_work_mode_upgrade_checks: number;
+  miner_max_work_mode: number;
   miners_power_limit: number;
   miner_power_standby: number;
   miner_power_eco: number;

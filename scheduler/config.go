@@ -43,6 +43,7 @@ type Config struct {
 	FanRHighThreshold          int `json:"fanr_high_threshold"`           // FanR threshold to decrease work mode
 	FanRLowThreshold           int `json:"fanr_low_threshold"`            // FanR threshold to increase work mode
 	MinerWorkModeUpgradeChecks int `json:"miner_work_mode_upgrade_checks"` // Number of consecutive checks at current work mode required before upgrading
+	MinerMaxWorkMode           int `json:"miner_max_work_mode"`            // Maximum work mode miners may be upgraded to (0=Eco, 1=Standard, 2=Super)
 
 	// Power consumption settings (in kilowatts)
 	MinersPowerLimit         float64 `json:"miners_power_limit"`           // Maximum total power limit for miners in kW
@@ -137,6 +138,7 @@ func DefaultConfig() *Config {
 		ImportPriceDeliveryFee:           40.0,    // 40 EUR/MWh for delivery
 		ExportPriceOperatorFee:           17.0,    // 17 EUR/MWh from Operator
 		MinerWorkModeUpgradeChecks:       5,       // 5 consecutive checks required before upgrading work mode
+		MinerMaxWorkMode:                 1,       // Standard mode (1) is the default maximum
 		MinersPowerLimit:                 30.0,    // 30 kW total power limit for miners
 		MinerPowerStandby:                0.05,    // 0.05 kW (50 W) in standby
 		MinerPowerEco:                    0.8,     // 0.8 kW (800 W) in eco mode
@@ -240,6 +242,10 @@ func (c *Config) Validate() error {
 
 	if c.MinerWorkModeUpgradeChecks <= 0 {
 		return fmt.Errorf("miner_work_mode_upgrade_checks must be greater than 0, got: %d", c.MinerWorkModeUpgradeChecks)
+	}
+
+	if c.MinerMaxWorkMode < 0 || c.MinerMaxWorkMode > 2 {
+		return fmt.Errorf("miner_max_work_mode must be 0 (Eco), 1 (Standard), or 2 (Super), got: %d", c.MinerMaxWorkMode)
 	}
 
 	if c.APITimeout <= 0 {

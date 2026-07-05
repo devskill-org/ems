@@ -7,7 +7,7 @@ interface ConfigMenuProps {
   onClose: () => void;
 }
 
-type FieldType = "text" | "number" | "boolean" | "select" | "duration";
+type FieldType = "text" | "number" | "boolean" | "select" | "duration" | "numericSelect";
 
 interface FieldDef {
   key: keyof EmsConfig;
@@ -19,6 +19,7 @@ interface FieldDef {
   max?: number;
   step?: number;
   options?: string[];
+  numericOptions?: { value: number; label: string }[];
   sensitive?: boolean;
 }
 
@@ -171,6 +172,17 @@ const SECTIONS: Section[] = [
         type: "number",
         min: 1,
         hint: "Consecutive checks at current work mode required before upgrading",
+      },
+      {
+        key: "miner_max_work_mode",
+        label: "Max Work Mode",
+        type: "numericSelect",
+        numericOptions: [
+          { value: 0, label: "Eco" },
+          { value: 1, label: "Standard" },
+          { value: 2, label: "Super" },
+        ],
+        hint: "Highest work mode miners are allowed to reach",
       },
       {
         key: "miners_power_limit",
@@ -511,7 +523,7 @@ function ConfigField({ def, value, onChange }: FieldProps) {
         onChange(def.key, raw as boolean);
         return;
       }
-      if (def.type === "number") {
+      if (def.type === "number" || def.type === "numericSelect") {
         const parsed = raw === "" ? 0 : Number(raw);
         onChange(def.key, isNaN(parsed) ? 0 : parsed);
         return;
@@ -551,6 +563,18 @@ function ConfigField({ def, value, onChange }: FieldProps) {
           {def.options?.map((opt) => (
             <option key={opt} value={opt}>
               {opt}
+            </option>
+          ))}
+        </select>
+      ) : def.type === "numericSelect" ? (
+        <select
+          className="config-input"
+          value={String(value ?? 0)}
+          onChange={(e) => handleChange(e.target.value)}
+        >
+          {def.numericOptions?.map((opt) => (
+            <option key={opt.value} value={String(opt.value)}>
+              {opt.label}
             </option>
           ))}
         </select>

@@ -38,6 +38,7 @@ func newTestScheduler(cfg *Config) *MinerScheduler {
 			MinerPowerSuper:            2.0,
 			MinersPowerLimit:           10.0,
 			MinerWorkModeUpgradeChecks: 5,
+			MinerMaxWorkMode:           2,
 		}
 	}
 	return NewMinerScheduler(cfg, log.New(os.Stdout, "TEST: ", log.LstdFlags))
@@ -413,6 +414,7 @@ func TestControlMiner_CustomThresholds(t *testing.T) {
 		MinerPowerSuper:            2.0,
 		MinersPowerLimit:           10.0,
 		MinerWorkModeUpgradeChecks: 5,
+		MinerMaxWorkMode:           2,
 	}
 	scheduler := newTestScheduler(cfg)
 
@@ -625,6 +627,7 @@ func TestControlMiner_PowerCalculation(t *testing.T) {
 		MinerPowerSuper:            2.5,
 		MinersPowerLimit:           10.0,
 		MinerWorkModeUpgradeChecks: 5,
+		MinerMaxWorkMode:           2,
 	}
 	scheduler := newTestScheduler(cfg)
 

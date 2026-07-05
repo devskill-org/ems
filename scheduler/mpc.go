@@ -559,6 +559,19 @@ func (s *MinerScheduler) estimateSolarPowerFromWeather(forecast *meteo.METJSONFo
 	return solarPower, cloudCoverage, weatherSymbol, airTemperature
 }
 
+// maxWorkModePower returns the per-miner power consumption (kW) for the
+// configured maximum work mode (MinerMaxWorkMode: 0=Eco, 1=Standard, 2=Super).
+func maxWorkModePower(config *Config) float64 {
+	switch config.MinerMaxWorkMode {
+	case 0:
+		return config.MinerPowerEco
+	case 1:
+		return config.MinerPowerStandard
+	default: // 2 = Super
+		return config.MinerPowerSuper
+	}
+}
+
 // estimateLoadForecast estimates power load based on price and available power
 // Follows the same logic as manageMiners: miners wake up in Eco mode when price <= limit,
 // but only if there's enough power budget (when PV power control is enabled)
@@ -594,9 +607,9 @@ func (s *MinerScheduler) estimateLoadForecast(spotPrice float64, priceLimit floa
 	pvControlEnabled := spotPrice >= config.PVPowerControlPriceLimit
 	if !pvControlEnabled {
 		// Without PV power control, miners can run but total power must not exceed
-		// the configured MinersPowerLimit.
-		totalMinerPower := float64(numMiners) * config.MinerPowerSuper
-		if totalMinerPower > config.MinersPowerLimit {
+			// the configured MinersPowerLimit.  Cap at the maximum allowed work mode.
+			totalMinerPower := float64(numMiners) * maxWorkModePower(config)
+			if totalMinerPower > config.MinersPowerLimit {
 			totalMinerPower = config.MinersPowerLimit
 		}
 		return totalMinerPower
@@ -609,15 +622,15 @@ func (s *MinerScheduler) estimateLoadForecast(spotPrice float64, priceLimit floa
 		effectiveLimit = solarForecast
 	}
 
-	// Try each work mode from highest to lowest.  Use the first (highest) mode where
-	// at least one miner can run within the effective limit.
+	// Try each work mode from MinerMaxWorkMode down to Eco.  Use the first
+	// (highest) mode where at least one miner can run within the effective limit.
 	type modeEntry struct {
 		power float64
 	}
-	modes := []modeEntry{
-		{config.MinerPowerSuper},
-		{config.MinerPowerStandard},
-		{config.MinerPowerEco},
+	allModePowers := []float64{config.MinerPowerEco, config.MinerPowerStandard, config.MinerPowerSuper}
+	modes := make([]modeEntry, 0, config.MinerMaxWorkMode+1)
+	for i := config.MinerMaxWorkMode; i >= 0; i-- {
+		modes = append(modes, modeEntry{allModePowers[i]})
 	}
 
 	for _, m := range modes {

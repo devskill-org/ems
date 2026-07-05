@@ -61,6 +61,7 @@ func baseConfig() *Config {
 		MinerPowerSuper:          2.0,
 		MinersPowerLimit:         20.0, // large enough not to be a bottleneck unless tested
 		PVPowerControlPriceLimit: 999.0,
+		MinerMaxWorkMode:         2, // Super — tests that rely on full range keep working
 	}
 }
 
@@ -468,6 +469,7 @@ func TestEstimateLoadForecast_TableDriven(t *testing.T) {
 		MinerPowerSuper:          2.0,
 		MinersPowerLimit:         20.0,
 		PVPowerControlPriceLimit: 10.0,
+		MinerMaxWorkMode:         2, // Super — full range for table-driven tests
 	}
 
 	tests := []struct {
@@ -836,6 +838,99 @@ func TestDecideBatteryAction_GridCharge_LimitClampedToMaxCharge(t *testing.T) {
 		t.Errorf("expected mode 2, got %d", action.mode)
 	}
 	if action.chargeLimit != 8.0 {
-		t.Errorf("expected chargeLimit clamped to maxCharge 8.0, got %.2f", action.chargeLimit)
+			t.Errorf("expected chargeLimit clamped to maxCharge 8.0, got %.2f", action.chargeLimit)
+		}
 	}
-}
+
+	// ---------------------------------------------------------------------------
+	// MinerMaxWorkMode tests
+	// ---------------------------------------------------------------------------
+
+	// TestEstimateLoadForecast_MaxWorkMode_NoPowerControl verifies that when PV power
+	// control is off the load forecast uses the max-allowed work mode rather than Super.
+	func TestEstimateLoadForecast_MaxWorkMode_NoPowerControl(t *testing.T) {
+		const numMiners = 3
+
+		tests := []struct {
+			name        string
+			maxWorkMode int
+			wantPower   float64
+		}{
+			{"eco cap", 0, float64(numMiners) * 1.0},      // 3 × Eco
+			{"standard cap", 1, float64(numMiners) * 1.5}, // 3 × Standard
+			{"super cap", 2, float64(numMiners) * 2.0},    // 3 × Super
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				cfg := baseConfig()
+				cfg.PVPowerControlPriceLimit = 999.0 // power control OFF
+				cfg.MinersPowerLimit = 20.0
+				cfg.MinerMaxWorkMode = tc.maxWorkMode
+				s := newMPCTestScheduler(cfg, numMiners)
+
+				got := s.estimateLoadForecast(50.0, 0.1, 0.0, cfg)
+				if got != tc.wantPower {
+					t.Errorf("MinerMaxWorkMode=%d: expected %.4f, got %.4f", tc.maxWorkMode, tc.wantPower, got)
+				}
+			})
+		}
+	}
+
+	// TestEstimateLoadForecast_MaxWorkMode_PowerControl verifies that when PV power
+	// control is on the modes list is capped at MinerMaxWorkMode — Super is not
+	// attempted when the cap is Standard or Eco.
+	func TestEstimateLoadForecast_MaxWorkMode_PowerControl(t *testing.T) {
+		tests := []struct {
+			name        string
+			maxWorkMode int
+			solar       float64
+			numMiners   int
+			wantPower   float64
+			description string
+		}{
+			{
+				// Standard cap: solar = 3.0 kW.
+				// Without cap: Super (2.0) → floor(3/2)=1 → CHOSEN.
+				// With Standard cap: Standard (1.5) → floor(3/1.5)=2 → CHOSEN.
+				name: "standard cap uses standard not super",
+				maxWorkMode: 1, solar: 3.0, numMiners: 4,
+				wantPower:   2*1.5 + 2*0.1,
+				description: "Standard cap: 2 miners at Standard + 2 standby",
+			},
+			{
+				// Eco cap: solar = 3.0 kW.
+				// Without cap: Super → 1 miner.
+				// With Eco cap: Eco (1.0) → floor(3/1.0)=3 → all run at Eco.
+				name: "eco cap uses eco not super",
+				maxWorkMode: 0, solar: 3.0, numMiners: 3,
+				wantPower:   3 * 1.0,
+				description: "Eco cap: all 3 miners at Eco",
+			},
+			{
+				// Standard cap, solar only fits Eco.
+				// Standard (1.5): floor(1.2/1.5)=0 → skip.
+				// Eco      (1.0): floor(1.2/1.0)=1 → CHOSEN.
+				name: "standard cap falls back to eco",
+				maxWorkMode: 1, solar: 1.2, numMiners: 3,
+				wantPower:   1*1.0 + 2*0.1,
+				description: "Standard cap with low solar: 1 miner at Eco + 2 standby",
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				cfg := baseConfig()
+				cfg.PVPowerControlPriceLimit = 10.0 // power control ON
+				cfg.MinersPowerLimit = 20.0
+				cfg.MinerMaxWorkMode = tc.maxWorkMode
+				s := newMPCTestScheduler(cfg, tc.numMiners)
+
+				got := s.estimateLoadForecast(50.0, 0.1, tc.solar, cfg)
+				const eps = 1e-9
+				if diff := got - tc.wantPower; diff < -eps || diff > eps {
+					t.Errorf("%s: expected %.4f, got %.4f", tc.description, tc.wantPower, got)
+				}
+			})
+		}
+	}
