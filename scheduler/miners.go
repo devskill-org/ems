@@ -309,12 +309,14 @@ func (s *MinerScheduler) controlMiner(m *miners.AvalonQHost, totalPower float64,
 		}
 		return currentState, newWorkMode
 	} else if fanR < s.config.FanRLowThreshold && totalPower <= effectiveLimit {
-		// Increase work mode only if all LiteStatsHistory fanR values match criteria
-		if len(m.LiteStatsHistory) < 5 || currentWorkMode == miners.AvalonSuperMode {
+		// Increase work mode only if the last N consecutive checks all passed at the current work mode
+		requiredChecks := s.config.MinerWorkModeUpgradeChecks
+		if len(m.LiteStatsHistory) < requiredChecks || currentWorkMode == miners.AvalonSuperMode {
 			return currentState, currentWorkMode
 		}
-		for _, stat := range m.LiteStatsHistory {
-			if stat.FanR >= s.config.FanRLowThreshold {
+		recentHistory := m.LiteStatsHistory[len(m.LiteStatsHistory)-requiredChecks:]
+		for _, stat := range recentHistory {
+			if stat.FanR >= s.config.FanRLowThreshold || stat.WorkMode != currentWorkMode {
 				return currentState, currentWorkMode
 			}
 		}

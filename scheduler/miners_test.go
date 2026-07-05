@@ -30,13 +30,14 @@ import (
 func newTestScheduler(cfg *Config) *MinerScheduler {
 	if cfg == nil {
 		cfg = &Config{
-			FanRHighThreshold:  80,
-			FanRLowThreshold:   50,
-			MinerPowerStandby:  0.1,
-			MinerPowerEco:      1.0,
-			MinerPowerStandard: 1.5,
-			MinerPowerSuper:    2.0,
-			MinersPowerLimit:   10.0,
+			FanRHighThreshold:          80,
+			FanRLowThreshold:           50,
+			MinerPowerStandby:          0.1,
+			MinerPowerEco:              1.0,
+			MinerPowerStandard:         1.5,
+			MinerPowerSuper:            2.0,
+			MinersPowerLimit:           10.0,
+			MinerWorkModeUpgradeChecks: 5,
 		}
 	}
 	return NewMinerScheduler(cfg, log.New(os.Stdout, "TEST: ", log.LstdFlags))
@@ -404,13 +405,14 @@ func TestControlMiner_DecreaseWhenNewPowerWouldStillExceedLimit(t *testing.T) {
 func TestControlMiner_CustomThresholds(t *testing.T) {
 	// Test with custom FanR thresholds
 	cfg := &Config{
-		FanRHighThreshold:  70,
-		FanRLowThreshold:   40,
-		MinerPowerStandby:  0.1,
-		MinerPowerEco:      1.0,
-		MinerPowerStandard: 1.5,
-		MinerPowerSuper:    2.0,
-		MinersPowerLimit:   10.0,
+		FanRHighThreshold:          70,
+		FanRLowThreshold:           40,
+		MinerPowerStandby:          0.1,
+		MinerPowerEco:              1.0,
+		MinerPowerStandard:         1.5,
+		MinerPowerSuper:            2.0,
+		MinersPowerLimit:           10.0,
+		MinerWorkModeUpgradeChecks: 5,
 	}
 	scheduler := newTestScheduler(cfg)
 
@@ -615,13 +617,14 @@ func TestValidate_MinerMaxConsecutiveErrors(t *testing.T) {
 
 func TestControlMiner_PowerCalculation(t *testing.T) {
 	cfg := &Config{
-		FanRHighThreshold:  80,
-		FanRLowThreshold:   50,
-		MinerPowerStandby:  0.2,
-		MinerPowerEco:      1.2,
-		MinerPowerStandard: 1.8,
-		MinerPowerSuper:    2.5,
-		MinersPowerLimit:   10.0,
+		FanRHighThreshold:          80,
+		FanRLowThreshold:           50,
+		MinerPowerStandby:          0.2,
+		MinerPowerEco:              1.2,
+		MinerPowerStandard:         1.8,
+		MinerPowerSuper:            2.5,
+		MinersPowerLimit:           10.0,
+		MinerWorkModeUpgradeChecks: 5,
 	}
 	scheduler := newTestScheduler(cfg)
 

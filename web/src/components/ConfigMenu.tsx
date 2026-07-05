@@ -166,6 +166,13 @@ const SECTIONS: Section[] = [
         hint: "Increase work mode below this FanR",
       },
       {
+        key: "miner_work_mode_upgrade_checks",
+        label: "Work Mode Upgrade Checks",
+        type: "number",
+        min: 1,
+        hint: "Consecutive checks at current work mode required before upgrading",
+      },
+      {
         key: "miners_power_limit",
         label: "Total Power Limit",
         type: "number",
