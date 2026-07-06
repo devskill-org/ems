@@ -1557,3 +1557,111 @@ func TestNegativeExportPriceTransition(t *testing.T) {
 			i, labels[i], forecast[i].ExportPrice, d.BatteryDischarge, d.GridExport, d.Profit)
 	}
 }
+
+// TestOptimize_SolarSufficientSuppressesGridCharging verifies that BatteryChargeFromGrid
+// is zero for every slot when the total forecasted solar surplus over the horizon is
+// enough to charge the battery from its current SOC to BatteryMaxSOC.  Temporary cloud
+// cover (a slot with SolarForecast = 0 inside a sunny day) must NOT trigger grid imports.
+func TestOptimize_SolarSufficientSuppressesGridCharging(t *testing.T) {
+	config := SystemConfig{
+		BatteryCapacity:        10.0, // kWh
+		BatteryMaxCharge:       5.0,  // kW
+		BatteryMaxDischarge:    5.0,  // kW
+		BatteryMinSOC:          0.1,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.9,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	// Battery starts at 10% SOC and needs to reach 90%.
+	// energyNeededToFull = (0.9 - 0.1) * 10 / 0.9 ≈ 8.89 kWh
+	//
+	// Solar surplus per slot (solar - load, floored at 0) × 1 h:
+	//   slot 0: cloud  → max(0, 0 - 0.5) * 1 = 0 kWh
+	//   slot 1: sunny  → max(0, 5 - 0.5) * 1 = 4.5 kWh
+	//   slot 2: sunny  → max(0, 5 - 0.5) * 1 = 4.5 kWh
+	//   slot 3: sunny  → max(0, 5 - 0.5) * 1 = 4.5 kWh
+	//   slot 4: cloud  → max(0, 0 - 0.5) * 1 = 0 kWh
+	// Total solar surplus = 13.5 kWh  ≥  8.89 kWh → solarSufficient = true
+	forecast := []TimeSlot{
+		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.0, LoadForecast: 0.5},
+		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 2, Timestamp: 1704333600, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 3, Timestamp: 1704337200, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 4, Timestamp: 1704340800, ImportPrice: 0.30, ExportPrice: 0.15, SolarForecast: 0.0, LoadForecast: 0.5},
+	}
+
+	ctrl := NewController(config, len(forecast), 0.1)
+	decisions := ctrl.Optimize(forecast)
+
+	if len(decisions) != len(forecast) {
+		t.Fatalf("expected %d decisions, got %d", len(forecast), len(decisions))
+	}
+
+	for i, d := range decisions {
+		if d.BatteryChargeFromGrid > 1e-9 {
+			t.Errorf("slot %d: BatteryChargeFromGrid = %.4f kW, want 0 (solar sufficient)",
+				i, d.BatteryChargeFromGrid)
+		}
+		t.Logf("slot %d: ChargeFromPV=%.3f kW, ChargeFromGrid=%.3f kW, SOC=%.3f, Solar=%.1f kW",
+			i, d.BatteryChargeFromPV, d.BatteryChargeFromGrid, d.BatterySOC, forecast[i].SolarForecast)
+	}
+}
+
+// TestOptimize_SolarInsufficientAllowsGridCharging verifies that BatteryChargeFromGrid
+// is non-zero during cheap hours when the total forecasted solar surplus is not enough
+// to fully charge the battery.  Grid charging must still be planned on genuinely
+// overcast days or when the battery starts at a very low SOC.
+func TestOptimize_SolarInsufficientAllowsGridCharging(t *testing.T) {
+	config := SystemConfig{
+		BatteryCapacity:        10.0, // kWh
+		BatteryMaxCharge:       5.0,  // kW
+		BatteryMaxDischarge:    5.0,  // kW
+		BatteryMinSOC:          0.1,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.9,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	// Battery starts at 10% SOC and needs to reach 90%.
+	// energyNeededToFull ≈ 8.89 kWh
+	//
+	// Solar forecast is minimal – load exceeds solar every slot, so solar
+	// surplus = 0.  The only way to charge is from the grid.
+	forecast := []TimeSlot{
+		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.2, LoadForecast: 0.5}, // cheap
+		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.2, LoadForecast: 0.5}, // cheap
+		{Hour: 2, Timestamp: 1704333600, ImportPrice: 0.30, ExportPrice: 0.15, SolarForecast: 0.2, LoadForecast: 0.5}, // expensive
+		{Hour: 3, Timestamp: 1704337200, ImportPrice: 0.30, ExportPrice: 0.15, SolarForecast: 0.2, LoadForecast: 0.5}, // expensive
+	}
+
+	ctrl := NewController(config, len(forecast), 0.1)
+	decisions := ctrl.Optimize(forecast)
+
+	if len(decisions) != len(forecast) {
+		t.Fatalf("expected %d decisions, got %d", len(forecast), len(decisions))
+	}
+
+	// At least one cheap-hour slot must recommend grid charging.
+	gridChargeFound := false
+	for _, d := range decisions {
+		if d.BatteryChargeFromGrid > 0.01 {
+			gridChargeFound = true
+			break
+		}
+	}
+	if !gridChargeFound {
+		t.Error("expected BatteryChargeFromGrid > 0 in at least one slot when solar is insufficient")
+	}
+
+	for i, d := range decisions {
+		t.Logf("slot %d: ChargeFromPV=%.3f kW, ChargeFromGrid=%.3f kW, SOC=%.3f, ImportPrice=%.3f",
+			i, d.BatteryChargeFromPV, d.BatteryChargeFromGrid, d.BatterySOC, d.ImportPrice)
+	}
+}

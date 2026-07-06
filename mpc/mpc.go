@@ -111,9 +111,14 @@ func NewController(config SystemConfig, horizon int, initialSOC float64) *Contro
 	return c
 }
 
-// Optimize finds the optimal control strategy using dynamic programming
-// It runs two optimizations: one with solar forecast and one without (grid-only)
-// Then splits the BatteryCharge into BatteryChargeFromPV and BatteryChargeFromGrid
+// Optimize finds the optimal control strategy using dynamic programming.
+// It runs two optimizations: one with solar forecast and one without (grid-only),
+// then splits BatteryCharge into BatteryChargeFromPV and BatteryChargeFromGrid.
+//
+// Grid charging is suppressed entirely when the forecasted solar surplus over the
+// horizon is sufficient to charge the battery from its current SOC to full.  This
+// prevents unnecessary grid imports during temporary cloud cover when overall daily
+// solar production is more than enough to meet the full charge requirement.
 func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	if len(forecast) == 0 {
 		return nil
@@ -123,22 +128,48 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	// incentivised during this optimisation run – at most once per calendar week.
 	needsBalancing := mpc.needsWeeklyBalancing(forecast)
 
-	// Run optimization with full solar forecast
+	// Run optimization with full solar forecast.
 	decisionsWithSolar := mpc.optimizeWithForecast(forecast, true, needsBalancing)
 
 	// Run optimization without solar (grid-only scenario).
-	// This is used to determine how much grid charging is profitable regardless
-	// of solar, so that we still charge from the grid when the solar forecast is
-	// inaccurate (e.g. cloudy day with optimistic forecast).
+	// Used to identify grid charging that is profitable regardless of solar, so
+	// that the battery still charges from the grid on genuinely overcast days.
 	decisionsWithoutSolar := mpc.optimizeWithForecast(forecast, false, needsBalancing)
 
-	// Combine results: split BatteryCharge into PV and Grid components.
-	//
-	// The solar-scenario decision already accounts for the full charge rate
-	// (PV surplus first, topped up by grid when profitable). We derive the
-	// PV portion as whatever charge the solar surplus can cover, and treat
-	// the remainder as the grid portion.
 	n := min(len(decisionsWithSolar), len(forecast))
+
+	// ── Solar-sufficiency check ──────────────────────────────────────────────
+	// If the total forecasted solar surplus (generation minus load, summed over
+	// all slots) is enough to charge the battery from its current SOC to
+	// BatteryMaxSOC, suppress all grid charging decisions.  Clouds may
+	// temporarily reduce per-slot solar to zero, but as long as the day's
+	// overall production covers the full charge requirement there is no reason
+	// to import from the grid.
+	timeSlotDuration := mpc.Config.TimeSlotDuration
+	if timeSlotDuration == 0 {
+		timeSlotDuration = 1.0
+	}
+
+	// Energy (kWh at the AC input) needed to charge from CurrentSOC to
+	// BatteryMaxSOC, accounting for charging efficiency.
+	energyNeededToFull := math.Max(0,
+		(mpc.Config.BatteryMaxSOC-mpc.CurrentSOC)*mpc.Config.BatteryCapacity/mpc.Config.BatteryEfficiency)
+
+	// Sum of per-slot solar surplus (solar minus load, floored at 0) in kWh.
+	var totalSolarSurplus float64
+	for _, slot := range forecast[:n] {
+		totalSolarSurplus += math.Max(0, slot.SolarForecast-slot.LoadForecast) * timeSlotDuration
+	}
+
+	// When solar alone can cover the full charge, discard grid charging to
+	// avoid pulling from the grid during transient cloud cover.
+	solarSufficient := totalSolarSurplus >= energyNeededToFull
+
+	// ── Combine results ──────────────────────────────────────────────────────
+	// The solar-scenario decision accounts for the full charge rate (PV surplus
+	// first, topped up by grid when profitable).  We derive the PV portion as
+	// whatever charge the solar surplus can cover, and the grid portion from
+	// the without-solar scenario (unless solar is sufficient for the day).
 	finalDecisions := make([]ControlDecision, n)
 	for i, slot := range forecast[:n] {
 		finalDecisions[i] = decisionsWithSolar[i]
@@ -146,26 +177,28 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 		totalCharge := decisionsWithSolar[i].BatteryCharge
 
 		// PV surplus available for charging after serving the load.
-		// BatteryCharge/eff is the actual power drawn from the supply side to
-		// push `totalCharge` kW into the battery.
 		pvSurplus := math.Max(0, slot.SolarForecast-slot.LoadForecast)
 
 		// The PV portion is how much of the charge is covered by PV surplus
 		// (capped at the total charge being applied).
 		pvPortion := math.Min(pvSurplus, totalCharge)
 
-		// The grid portion is whatever the without-solar scenario recommends,
-		// but never more than what remains of BatteryMaxCharge after the PV
-		// portion is accounted for. This ensures pvPortion+gridPortion never
-		// exceeds the hardware-rated maximum charge power, which would cause
-		// the inverter to reject the register write with an illegal-data error.
-		gridPortion := math.Min(decisionsWithoutSolar[i].BatteryCharge, mpc.Config.BatteryMaxCharge-pvPortion)
-		gridPortion = math.Max(0, gridPortion)
+		// Grid portion: use the without-solar scenario's recommendation, but
+		// suppress it entirely when daily solar production is sufficient to
+		// charge the battery in full.  When allowed, cap so that
+		// pvPortion + gridPortion never exceeds the hardware-rated maximum
+		// charge power (exceeding it would cause the inverter to reject the
+		// register write with an illegal-data error).
+		gridPortion := 0.0
+		if !solarSufficient {
+			gridPortion = math.Min(decisionsWithoutSolar[i].BatteryCharge, mpc.Config.BatteryMaxCharge-pvPortion)
+			gridPortion = math.Max(0, gridPortion)
+		}
 
 		finalDecisions[i].BatteryChargeFromPV = pvPortion
 		finalDecisions[i].BatteryChargeFromGrid = gridPortion
 
-		// Keep total BatteryCharge for backward compatibility
+		// Keep total BatteryCharge for backward compatibility.
 		finalDecisions[i].BatteryCharge = totalCharge
 	}
 
