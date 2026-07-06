@@ -139,9 +139,10 @@ type MinerScheduler struct {
 
 	// Last inverter control values written via Remote EMS so we can skip
 	// redundant Modbus writes when nothing has changed.
-	lastWrittenMode           uint16
-	lastWrittenChargeLimit    float64
-	lastWrittenDischargeLimit float64
+	lastWrittenMode            uint16
+	lastWrittenChargeLimit     float64
+	lastWrittenDischargeLimit  float64
+	lastWrittenGridExportLimit float64 // -1 = not yet written; 0 = export disabled; >0 = limit in kW
 
 	// lastBalancingTime is the Unix timestamp of the most recent observation
 	// where the battery SOC reached BatteryMaxSOC (i.e. a full balancing
@@ -173,12 +174,13 @@ func NewMinerScheduler(config *Config, logger *log.Logger) *MinerScheduler {
 	}
 
 	scheduler := &MinerScheduler{
-		config:            config,
-		stopChan:          make(chan struct{}),
-		logger:            logger,
-		dataSamples:       &DataSamples{},
-		xmlCache:          entsoe.NewXMLDocumentCache(),
-		dataServiceClient: newDataServiceClient(config),
+		config:                     config,
+		stopChan:                   make(chan struct{}),
+		logger:                     logger,
+		dataSamples:                &DataSamples{},
+		xmlCache:                   entsoe.NewXMLDocumentCache(),
+		dataServiceClient:          newDataServiceClient(config),
+		lastWrittenGridExportLimit: -1, // -1 = sentinel: not yet written to inverter
 		weatherCache: WeatherForecastCache{
 			cacheDuration: 2 * time.Hour,
 		},

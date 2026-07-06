@@ -99,8 +99,9 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 	// Step 5: Save optimization results to memory
 	s.mu.Lock()
 	s.mpcDecisions = decisions
-	s.lastExecutedDecision = nil // Clear last executed decision for new optimization
-	s.lastWrittenMode = 0        // Force re-write of inverter registers after new plan
+	s.lastExecutedDecision = nil      // Clear last executed decision for new optimization
+	s.lastWrittenMode = 0             // Force re-write of inverter registers after new plan
+	s.lastWrittenGridExportLimit = -1 // Force re-write of grid export limit after new plan
 	s.mu.Unlock()
 
 	// Step 5.1: Persist decisions to database (only when not in dry run mode)
@@ -607,9 +608,9 @@ func (s *MinerScheduler) estimateLoadForecast(spotPrice float64, priceLimit floa
 	pvControlEnabled := spotPrice >= config.PVPowerControlPriceLimit
 	if !pvControlEnabled {
 		// Without PV power control, miners can run but total power must not exceed
-			// the configured MinersPowerLimit.  Cap at the maximum allowed work mode.
-			totalMinerPower := float64(numMiners) * maxWorkModePower(config)
-			if totalMinerPower > config.MinersPowerLimit {
+		// the configured MinersPowerLimit.  Cap at the maximum allowed work mode.
+		totalMinerPower := float64(numMiners) * maxWorkModePower(config)
+		if totalMinerPower > config.MinersPowerLimit {
 			totalMinerPower = config.MinersPowerLimit
 		}
 		return totalMinerPower
@@ -793,6 +794,14 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	action := decideBatteryAction(decision, config.BatteryMaxCharge, recentAvgPV)
 	s.logger.Print(action.logMsg)
 
+	// Enforce hardware-level grid export limit based on the current export price.
+	// When the export price is negative (or zero), set the inverter's grid-point
+	// export limit to 0 so no power can reach the grid regardless of ESS mode or
+	// PV surplus.  The limit is restored to MaxGridExport when prices turn positive.
+	if err := s.applyGridExportLimit(client, decision.ExportPrice, config.MaxGridExport); err != nil {
+		return err
+	}
+
 	if err := s.applyInverterMode(client, action.mode, action.chargeLimit, action.dischargeLimit, action.setCharge, action.setDischarge); err != nil {
 		return err
 	}
@@ -800,6 +809,48 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	s.logger.Printf("Successfully executed MPC decision - Mode: %d, SOC: %.1f%%, ChargeFromPV: %.1f kW, ChargeFromGrid: %.1f kW, Discharge: %.1f kW, GridImport: %.1f kW, GridExport: %.1f kW",
 		action.mode, decision.BatterySOC*100, decision.BatteryChargeFromPV, decision.BatteryChargeFromGrid, decision.BatteryDischarge, decision.GridImport, decision.GridExport)
 
+	return nil
+}
+
+// applyGridExportLimit enforces the grid-point export limit on the inverter.
+// When the export price is negative or zero the limit is set to 0 (no export
+// allowed).  When the price is positive the limit is restored to maxGridExport.
+// Writes are suppressed when the value has not changed since the last write.
+func (s *MinerScheduler) applyGridExportLimit(
+	client interface {
+		SetGridPointMaxExportLimit(float64) error
+	},
+	exportPrice float64,
+	maxGridExport float64,
+) error {
+	var targetLimit float64
+	if exportPrice <= 0 {
+		targetLimit = 0
+	} else {
+		targetLimit = maxGridExport
+	}
+
+	s.mu.Lock()
+	last := s.lastWrittenGridExportLimit
+	s.mu.Unlock()
+
+	if last == targetLimit {
+		return nil
+	}
+
+	if err := client.SetGridPointMaxExportLimit(targetLimit); err != nil {
+		return fmt.Errorf("failed to set grid point export limit: %w", err)
+	}
+
+	s.mu.Lock()
+	s.lastWrittenGridExportLimit = targetLimit
+	s.mu.Unlock()
+
+	if exportPrice <= 0 {
+		s.logger.Printf("Grid export disabled: export price %.4f $/kWh is non-positive (grid point export limit set to 0 kW)", exportPrice)
+	} else {
+		s.logger.Printf("Grid export restored: export price %.4f $/kWh is positive (grid point export limit set to %.1f kW)", exportPrice, targetLimit)
+	}
 	return nil
 }
 

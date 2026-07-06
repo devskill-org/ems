@@ -127,10 +127,10 @@ func (c *SigenModbusClient) ReadPlantRunningInfo(dcChargerSlaveID byte) (*PlantR
 		c.SetSlaveID(PlantAddress)
 		return nil, fmt.Errorf("failed to read DC charger registers: %w", err)
 	}
-	info.DCChargerVehicleVoltage  = float64(bytesToU16(data3[0:2])) / 10.0
+	info.DCChargerVehicleVoltage = float64(bytesToU16(data3[0:2])) / 10.0
 	info.DCChargerChargingCurrent = float64(bytesToU16(data3[2:4])) / 10.0
-	info.DCChargerOutputPower     = float64(bytesToS32(data3[4:8])) / 1000.0
-	info.DCChargerVehicleSOC      = float64(bytesToU16(data3[8:10])) / 10.0
+	info.DCChargerOutputPower = float64(bytesToS32(data3[4:8])) / 1000.0
+	info.DCChargerVehicleSOC = float64(bytesToU16(data3[8:10])) / 10.0
 	// evPluggedInVoltageThreshold is the minimum vehicle battery voltage (V)
 	// treated as evidence of a physical cable connection.  The DC bus retains a
 	// small residual charge after disconnection (~1–2 V from capacitor bleed-off);
@@ -257,6 +257,16 @@ func (c *SigenModbusClient) SetPVMaxPowerLimit(powerKW float64) error {
 	c.SetSlaveID(PlantAddress)
 	value := uint32(powerKW * 1000)
 	_, err := c.client.WriteMultipleRegisters(40036, 2, u32ToBytes(value))
+	return err
+}
+
+// SetGridPointMaxExportLimit sets the grid point maximum export limit (kW).
+// Requires a grid sensor. Takes effect globally regardless of the EMS operating mode.
+// Set to 0 to prevent any power export to the grid.
+func (c *SigenModbusClient) SetGridPointMaxExportLimit(powerKW float64) error {
+	c.SetSlaveID(PlantAddress)
+	value := uint32(powerKW * 1000)
+	_, err := c.client.WriteMultipleRegisters(40038, 2, u32ToBytes(value))
 	return err
 }
 
