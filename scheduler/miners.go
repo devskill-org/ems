@@ -128,7 +128,6 @@ func (s *MinerScheduler) getEffecivePowerLimit(ctx context.Context) float64 {
 		availablePower = info.PhotovoltaicPower // in kW
 	}
 	powerLimit := s.config.MinersPowerLimit // in kW
-	s.logger.Printf("PV Power Control: Available PV power: %.2f kW, Miners power limit: %.2f kW", availablePower, powerLimit)
 
 	// Use the minimum of available PV power and configured power limit
 	effectiveLimit := powerLimit
@@ -178,7 +177,6 @@ func (s *MinerScheduler) manageMiners(ctx context.Context, currentPrice float64)
 		effectiveLimit = s.config.MinersPowerLimit
 	}
 	totalPower = s.calculateTotalPowerConsumption(minersList)
-	s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
 
 	// Standard price-based control
 	var wg sync.WaitGroup
@@ -346,7 +344,6 @@ func (s *MinerScheduler) runStateCheck(ctx context.Context) error {
 	if usePowerControl {
 		effectiveLimit = s.getEffecivePowerLimit(ctx)
 	}
-	s.logger.Printf("Current total power consumption: %.2f kW, Effective limit: %.2f kW", totalPower, effectiveLimit)
 
 	var wg sync.WaitGroup
 	var powerMu sync.Mutex // Mutex to protect totalPower updates

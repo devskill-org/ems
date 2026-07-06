@@ -186,7 +186,6 @@ func (s *MinerScheduler) getCurrentPrice(ctx context.Context) (float64, error) {
 	}
 
 	if price, found := marketData.LookupPriceByTime(now); found {
-		s.logger.Printf("Price found: %.2f EUR/MWh", price)
 		return price, nil
 	}
 
