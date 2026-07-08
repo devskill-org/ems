@@ -561,7 +561,7 @@ func TestRefreshMinersState_ResetsErrorCountOnSuccess(t *testing.T) {
 
 	// Successful stats call → counter must reset to zero.
 	stats := &miners.AvalonLiteStats{State: miners.AvalonStateMining}
-	miner.AddLiteStats(stats, nil)
+	miner.AddLiteStats(stats, nil, 5)
 
 	if miner.ConsecutiveErrors != 0 {
 		t.Errorf("expected ConsecutiveErrors to be reset to 0 after success, got %d", miner.ConsecutiveErrors)
@@ -571,18 +571,18 @@ func TestRefreshMinersState_ResetsErrorCountOnSuccess(t *testing.T) {
 	}
 
 	// Failing stats call → counter must increment.
-	miner.AddLiteStats(nil, errors.New("timeout"))
+	miner.AddLiteStats(nil, errors.New("timeout"), 5)
 	if miner.ConsecutiveErrors != 1 {
 		t.Errorf("expected ConsecutiveErrors to be 1 after first failure, got %d", miner.ConsecutiveErrors)
 	}
 
-	miner.AddLiteStats(nil, errors.New("timeout"))
+	miner.AddLiteStats(nil, errors.New("timeout"), 5)
 	if miner.ConsecutiveErrors != 2 {
 		t.Errorf("expected ConsecutiveErrors to be 2 after second failure, got %d", miner.ConsecutiveErrors)
 	}
 
 	// Another success → counter resets again.
-	miner.AddLiteStats(stats, nil)
+	miner.AddLiteStats(stats, nil, 5)
 	if miner.ConsecutiveErrors != 0 {
 		t.Errorf("expected ConsecutiveErrors to reset to 0 after recovery, got %d", miner.ConsecutiveErrors)
 	}

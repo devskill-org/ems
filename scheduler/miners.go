@@ -96,7 +96,7 @@ func (s *MinerScheduler) refreshMinersState(ctx context.Context) []*miners.Avalo
 			defer wg.Done()
 
 			// Get current stats
-			m.RefreshLiteStats(ctx)
+			m.RefreshLiteStats(ctx, s.config.MinerWorkModeUpgradeChecks)
 		}(miner)
 	}
 	wg.Wait()

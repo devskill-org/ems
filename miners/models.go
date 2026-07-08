@@ -74,8 +74,8 @@ type AvalonQHost struct {
 	ConsecutiveErrors int // number of consecutive RefreshLiteStats failures
 }
 
-// AddLiteStats appends a new AvalonLiteStats to the history and keeps only the last 5 entries.
-func (h *AvalonQHost) AddLiteStats(stats *AvalonLiteStats, err error) {
+// AddLiteStats appends a new AvalonLiteStats to the history and keeps only the last maxHistory entries.
+func (h *AvalonQHost) AddLiteStats(stats *AvalonLiteStats, err error, maxHistory int) {
 	h.LastStats = stats
 	h.LastStatsError = err
 	if err != nil {
@@ -84,8 +84,8 @@ func (h *AvalonQHost) AddLiteStats(stats *AvalonLiteStats, err error) {
 	}
 	h.ConsecutiveErrors = 0
 	h.LiteStatsHistory = append(h.LiteStatsHistory, stats)
-	if len(h.LiteStatsHistory) > 5 {
-		h.LiteStatsHistory = h.LiteStatsHistory[len(h.LiteStatsHistory)-5:]
+	if len(h.LiteStatsHistory) > maxHistory {
+		h.LiteStatsHistory = h.LiteStatsHistory[len(h.LiteStatsHistory)-maxHistory:]
 	}
 }
 

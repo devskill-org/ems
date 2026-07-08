@@ -417,7 +417,7 @@ func (h *AvalonQHost) WakeUp(ctx context.Context) (string, error) {
 }
 
 // RefreshLiteStats refreshes the lite statistics for the Avalon miner.
-func (h *AvalonQHost) RefreshLiteStats(ctx context.Context) {
+func (h *AvalonQHost) RefreshLiteStats(ctx context.Context, maxHistory int) {
 	stats, err := send(ctx, h.Address, h.Port,
 		func(conn net.Conn) error {
 			return writeCommand("litestats", conn)
@@ -433,10 +433,10 @@ func (h *AvalonQHost) RefreshLiteStats(ctx context.Context) {
 		err = fmt.Errorf("invalid stats response for miner %s:%d", h.Address, h.Port)
 	}
 	if err != nil {
-		h.AddLiteStats(nil, err)
+		h.AddLiteStats(nil, err, maxHistory)
 		return
 	}
-	h.AddLiteStats(stats.Stats[0].MMIDSummary, err)
+	h.AddLiteStats(stats.Stats[0].MMIDSummary, err, maxHistory)
 }
 
 func version(ctx context.Context, address string, port int) (*AvalonQVersion, error) {
