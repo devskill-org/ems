@@ -137,8 +137,15 @@ export function MPCDecisions({ decisions }: MPCDecisionsProps) {
 
   // Helper function to determine battery action
   const getBatteryAction = useCallback((decision: MPCDecisionInfo) => {
-    if (decision.battery_charge > 0.1) {
-      return { action: "charge", power: decision.battery_charge };
+    // The actual charge is the sum of the PV and grid contributions; the
+    // MPC may suppress either component independently (e.g. grid charging
+    // withheld pending forecasted solar), so both must be summed to get
+    // the true charging power.
+    const actualCharge =
+      (decision.battery_charge_from_pv ?? 0) +
+      (decision.battery_charge_from_grid ?? 0);
+    if (actualCharge > 0.1) {
+      return { action: "charge", power: actualCharge };
     } else if (decision.battery_discharge > 0.1) {
       return { action: "discharge", power: decision.battery_discharge };
     }

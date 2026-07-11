@@ -747,6 +747,43 @@ func TestDecideBatteryAction_DischargeWithPlannedGridExportUsesMode5(t *testing.
 }
 
 // ---------------------------------------------------------------------------
+// Default (no charge/discharge planned) tests
+// ---------------------------------------------------------------------------
+
+// TestDecideBatteryAction_DefaultUsesSelfConsumptionNotIdle verifies that when
+// no charge or discharge is planned (e.g. grid charging was suppressed by the
+// day-ahead solar-sufficiency heuristic), the battery is put into Mode 2
+// (self-consumption) with the charge limit raised to maxCharge — instead of
+// forced idle — so it can still absorb any real PV surplus, while discharge
+// stays capped at 0 so it won't drain against the plan.
+func TestDecideBatteryAction_DefaultUsesSelfConsumptionNotIdle(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryChargeFromPV:   0,
+		BatteryChargeFromGrid: 0,
+		BatteryDischarge:      0,
+		GridImport:            5.0,
+		GridExport:            0,
+	}
+	action := decideBatteryAction(decision, 10.0, 0.0)
+
+	if action.mode != 2 {
+		t.Errorf("expected mode 2 (self-consumption), got %d", action.mode)
+	}
+	if !action.setCharge {
+		t.Error("expected setCharge to be true")
+	}
+	if action.chargeLimit != 10.0 {
+		t.Errorf("expected chargeLimit raised to maxCharge 10.0, got %.2f", action.chargeLimit)
+	}
+	if !action.setDischarge {
+		t.Error("expected setDischarge to be true")
+	}
+	if action.dischargeLimit != 0 {
+		t.Errorf("expected dischargeLimit 0, got %.2f", action.dischargeLimit)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // PV recovery gate tests (grid charging suppression when cloud clears)
 // ---------------------------------------------------------------------------
 

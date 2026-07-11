@@ -266,7 +266,6 @@ function generateMPCDecisions(): MPCDecisionInfo[] {
     decisions.push({
       hour: hour + minute / 60, // Fractional hour (e.g., 10.25 for 10:15)
       timestamp,
-      battery_charge: batteryCharge,
       battery_charge_from_pv: batteryChargeFromPV,
       battery_charge_from_grid: batteryChargeFromGrid,
       battery_discharge: batteryDischarge,

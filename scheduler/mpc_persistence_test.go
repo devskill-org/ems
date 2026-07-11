@@ -74,7 +74,6 @@ func TestMPCDataSaveAndLoad(t *testing.T) {
 		{
 			Hour:                  0,
 			Timestamp:             now + 3600,
-			BatteryCharge:         10.5,
 			BatteryChargeFromPV:   10.5,
 			BatteryChargeFromGrid: 5.0,
 			BatteryDischarge:      0,
@@ -95,7 +94,6 @@ func TestMPCDataSaveAndLoad(t *testing.T) {
 		{
 			Hour:                  1,
 			Timestamp:             now + 7200,
-			BatteryCharge:         0,
 			BatteryChargeFromPV:   0,
 			BatteryChargeFromGrid: 0,
 			BatteryDischarge:      8.0,
@@ -137,9 +135,6 @@ func TestMPCDataSaveAndLoad(t *testing.T) {
 	for i, decision := range loaded {
 		if decision.Timestamp != decisions[i].Timestamp {
 			t.Errorf("Decision %d: expected timestamp %d, got %d", i, decisions[i].Timestamp, decision.Timestamp)
-		}
-		if decision.BatteryCharge != decisions[i].BatteryCharge {
-			t.Errorf("Decision %d: expected battery_charge %.2f, got %.2f", i, decisions[i].BatteryCharge, decision.BatteryCharge)
 		}
 		if decision.BatteryChargeFromPV != decisions[i].BatteryChargeFromPV {
 			t.Errorf("Decision %d: expected battery_charge_from_pv %.2f, got %.2f", i, decisions[i].BatteryChargeFromPV, decision.BatteryChargeFromPV)

@@ -90,9 +90,10 @@ func main() {
 		slot := forecast[dec.Hour]
 		totalProfit += dec.Profit
 
+		charge := dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid
 		battAction := "idle"
-		if dec.BatteryCharge > 0.1 {
-			battAction = fmt.Sprintf("+%.1fkW", dec.BatteryCharge)
+		if charge > 0.1 {
+			battAction = fmt.Sprintf("+%.1fkW", charge)
 		} else if dec.BatteryDischarge > 0.1 {
 			battAction = fmt.Sprintf("-%.1fkW", dec.BatteryDischarge)
 		}

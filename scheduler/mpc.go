@@ -743,13 +743,23 @@ func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recen
 		}
 
 	default:
-		// Mode 4: Idle — zero charge and discharge limits keep the battery passive.
+		// Mode 2: Self-consumption — the plan calls for no active charging,
+		// grid charging, or discharging (e.g. grid charging was suppressed
+		// because the day-ahead forecast expects enough solar later on, or
+		// there's simply nothing profitable to do right now). Rather than
+		// forcing the battery fully idle, allow it to opportunistically
+		// absorb any *actual* PV surplus the inverter sees in real time —
+		// forecasts can underestimate solar (e.g. clouds clearing sooner
+		// than expected) — while keeping discharge capped at 0 so the
+		// battery doesn't drain against the plan.
 		return batteryAction{
-			mode:         4,
-			setCharge:    true,
-			setDischarge: true,
-			logMsg: fmt.Sprintf("Setting battery to IDLE mode (minimal limits): GridImport: %.1f kW, GridExport: %.1f kW",
-				decision.GridImport, decision.GridExport),
+			mode:           2,
+			chargeLimit:    maxCharge,
+			dischargeLimit: 0,
+			setCharge:      true,
+			setDischarge:   true,
+			logMsg: fmt.Sprintf("Setting battery to SELF-CONSUMPTION mode (no active charge/discharge planned, absorbing any actual PV excess up to %.1f kW): GridImport: %.1f kW, GridExport: %.1f kW",
+				maxCharge, decision.GridImport, decision.GridExport),
 		}
 	}
 }

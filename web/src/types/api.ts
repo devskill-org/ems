@@ -58,7 +58,6 @@ export interface EmsConfig {
 export interface MPCDecisionInfo {
   hour: number;
   timestamp: number;
-  battery_charge: number;
   battery_charge_from_pv: number;
   battery_charge_from_grid: number;
   battery_discharge: number;

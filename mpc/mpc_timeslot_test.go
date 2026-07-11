@@ -50,15 +50,15 @@ func TestTimeSlotDuration15Minutes(t *testing.T) {
 	}
 
 	// Verify charging in first slot
-	if decisions[0].BatteryCharge < 3.0 {
-		t.Errorf("Expected significant charging in slot 0 (cheap price), got %.3f kW", decisions[0].BatteryCharge)
+	if (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid) < 3.0 {
+		t.Errorf("Expected significant charging in slot 0 (cheap price), got %.3f kW", (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid))
 	}
 
 	// Calculate expected SOC change from charging
 	// Energy charged = Power * Duration * Efficiency
 	// = 5 kW * 0.25 hours * 0.92 = 1.15 kWh
 	// SOC change = 1.15 kWh / 10 kWh = 0.115 = 11.5%
-	expectedSOCIncrease := (decisions[0].BatteryCharge * 0.25 * config.BatteryEfficiency) / config.BatteryCapacity
+	expectedSOCIncrease := ((decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid) * 0.25 * config.BatteryEfficiency) / config.BatteryCapacity
 	actualSOCChange := decisions[0].BatterySOC - 0.2
 
 	if actualSOCChange < expectedSOCIncrease*0.9 || actualSOCChange > expectedSOCIncrease*1.1 {
@@ -77,7 +77,7 @@ func TestTimeSlotDuration15Minutes(t *testing.T) {
 	// - Degradation should be for energy cycled in 15 minutes
 	slot0ImportEnergy := decisions[0].GridImport * 0.25 // kWh
 	slot0ImportCost := slot0ImportEnergy * forecast[0].ImportPrice
-	slot0Degradation := (decisions[0].BatteryCharge * 0.25) * config.BatteryDegradationCost
+	slot0Degradation := ((decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid) * 0.25) * config.BatteryDegradationCost
 	expectedSlot0Profit := -slot0ImportCost - slot0Degradation
 
 	if decisions[0].Profit > expectedSlot0Profit*0.8 || decisions[0].Profit < expectedSlot0Profit*1.2 {
@@ -88,11 +88,11 @@ func TestTimeSlotDuration15Minutes(t *testing.T) {
 
 	t.Logf("15-minute time slot test results:")
 	t.Logf("  Slot 0 (cheap): Charge=%.3f kW, SOC: 20%% -> %.1f%%, Profit=$%.4f",
-		decisions[0].BatteryCharge, decisions[0].BatterySOC*100, decisions[0].Profit)
+		(decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid), decisions[0].BatterySOC*100, decisions[0].Profit)
 	t.Logf("  Slot 1 (expensive): Discharge=%.3f kW, SOC: %.1f%% -> %.1f%%, Profit=$%.4f",
 		decisions[1].BatteryDischarge, decisions[0].BatterySOC*100, decisions[1].BatterySOC*100, decisions[1].Profit)
 	t.Logf("  Energy cycled in 15 min: Charge=%.3f kWh, Discharge=%.3f kWh",
-		decisions[0].BatteryCharge*0.25, decisions[1].BatteryDischarge*0.25)
+		(decisions[0].BatteryChargeFromPV+decisions[0].BatteryChargeFromGrid)*0.25, decisions[1].BatteryDischarge*0.25)
 }
 
 func TestTimeSlotDurationComparison(t *testing.T) {
@@ -237,7 +237,7 @@ func TestBatteryCapacityConstraints15Min(t *testing.T) {
 	chargingSlotsCount := 0
 	totalSOCIncrease := 0.0
 	for i := 0; i < 10; i++ {
-		if decisions[i].BatteryCharge > 0.1 {
+		if (decisions[i].BatteryChargeFromPV + decisions[i].BatteryChargeFromGrid) > 0.1 {
 			chargingSlotsCount++
 			if i == 0 {
 				totalSOCIncrease = decisions[i].BatterySOC - 0.2
@@ -262,7 +262,7 @@ func TestBatteryCapacityConstraints15Min(t *testing.T) {
 	// Check that at least one slot shows proper SOC increase
 	foundCorrectIncrease := false
 	for i := 1; i < 10; i++ {
-		if decisions[i].BatteryCharge > 4.0 {
+		if (decisions[i].BatteryChargeFromPV + decisions[i].BatteryChargeFromGrid) > 4.0 {
 			socIncrease := decisions[i].BatterySOC - decisions[i-1].BatterySOC
 			if socIncrease >= expectedSOCIncreasePerSlot*0.8 && socIncrease <= expectedSOCIncreasePerSlot*1.2 {
 				foundCorrectIncrease = true

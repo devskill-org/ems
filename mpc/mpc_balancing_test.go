@@ -444,8 +444,10 @@ func TestOptimizer_BackwardsCompatZeroBalancingFields(t *testing.T) {
 			t.Errorf("slot %d: SOC %.4f out of [%.2f, %.2f]",
 				i, d.BatterySOC, config.BatteryMinSOC, config.BatteryMaxSOC)
 		}
-		if d.BatteryCharge > config.BatteryMaxCharge+1e-9 {
-			t.Errorf("slot %d: BatteryCharge %.4f exceeds BatteryMaxCharge %.4f", i, d.BatteryCharge, config.BatteryMaxCharge)
+		totalCharge := d.BatteryChargeFromPV + d.BatteryChargeFromGrid
+		if totalCharge > config.BatteryMaxCharge+1e-9 {
+			t.Errorf("slot %d: total charge %.4f (PV %.4f + Grid %.4f) exceeds BatteryMaxCharge %.4f",
+				i, totalCharge, d.BatteryChargeFromPV, d.BatteryChargeFromGrid, config.BatteryMaxCharge)
 		}
 		if d.BatteryDischarge > config.BatteryMaxDischarge+1e-9 {
 			t.Errorf("slot %d: BatteryDischarge %.4f exceeds BatteryMaxDischarge %.4f", i, d.BatteryDischarge, config.BatteryMaxDischarge)

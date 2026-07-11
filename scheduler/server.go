@@ -56,7 +56,6 @@ type Health struct {
 type MPCDecisionInfo struct {
 	Hour                  int     `json:"hour"`
 	Timestamp             int64   `json:"timestamp"`
-	BatteryCharge         float64 `json:"battery_charge"`
 	BatteryChargeFromPV   float64 `json:"battery_charge_from_pv"`
 	BatteryChargeFromGrid float64 `json:"battery_charge_from_grid"`
 	BatteryDischarge      float64 `json:"battery_discharge"`
@@ -216,7 +215,6 @@ func (hs *WebServer) healthHandler(w http.ResponseWriter, r *http.Request) {
 		mpcDecisionsInfo = append(mpcDecisionsInfo, MPCDecisionInfo{
 			Hour:                  dec.Hour,
 			Timestamp:             dec.Timestamp,
-			BatteryCharge:         dec.BatteryCharge,
 			BatteryChargeFromPV:   dec.BatteryChargeFromPV,
 			BatteryChargeFromGrid: dec.BatteryChargeFromGrid,
 			BatteryDischarge:      dec.BatteryDischarge,
@@ -639,7 +637,6 @@ func (hs *WebServer) buildStatusData(ctx context.Context) map[string]any {
 		mpcDecisionsInfo = append(mpcDecisionsInfo, MPCDecisionInfo{
 			Hour:                  dec.Hour,
 			Timestamp:             dec.Timestamp,
-			BatteryCharge:         dec.BatteryCharge,
 			BatteryChargeFromPV:   dec.BatteryChargeFromPV,
 			BatteryChargeFromGrid: dec.BatteryChargeFromGrid,
 			BatteryDischarge:      dec.BatteryDischarge,

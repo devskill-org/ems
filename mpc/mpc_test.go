@@ -29,7 +29,7 @@ func TestCalculateProfit(t *testing.T) {
 				MaxGridExport:          10.0,
 			},
 			decision: ControlDecision{
-				BatteryCharge:    0,
+				batteryCharge:    0,
 				BatteryDischarge: 3.0, // 3 kW discharge
 				GridImport:       1.3, // Need to import some
 				GridExport:       0,
@@ -61,7 +61,7 @@ func TestCalculateProfit(t *testing.T) {
 				MaxGridExport:          10.0,
 			},
 			decision: ControlDecision{
-				BatteryCharge:    0,
+				batteryCharge:    0,
 				BatteryDischarge: 5.0, // 5 kW discharge
 				GridImport:       0,
 				GridExport:       3.5, // Export excess
@@ -93,7 +93,7 @@ func TestCalculateProfit(t *testing.T) {
 				MaxGridExport:          10.0,
 			},
 			decision: ControlDecision{
-				BatteryCharge:    4.0, // 4 kW charging
+				batteryCharge:    4.0, // 4 kW charging
 				BatteryDischarge: 0,
 				GridImport:       6.444, // Load + charge losses
 				GridExport:       0,
@@ -125,7 +125,7 @@ func TestCalculateProfit(t *testing.T) {
 				MaxGridExport:          10.0,
 			},
 			decision: ControlDecision{
-				BatteryCharge:    0,
+				batteryCharge:    0,
 				BatteryDischarge: 0,
 				GridImport:       0,
 				GridExport:       5.0, // Export excess solar
@@ -159,7 +159,7 @@ func TestCalculateProfit(t *testing.T) {
 				MaxGridExport:          10.0,
 			},
 			decision: ControlDecision{
-				BatteryCharge:    0,
+				batteryCharge:    0,
 				BatteryDischarge: 0,
 				GridImport:       4.0,
 				GridExport:       0,
@@ -193,7 +193,7 @@ func TestCalculateProfit(t *testing.T) {
 				MaxGridExport:          10.0,
 			},
 			decision: ControlDecision{
-				BatteryCharge:    0,
+				batteryCharge:    0,
 				BatteryDischarge: 0,
 				GridImport:       0,
 				GridExport:       0,
@@ -227,7 +227,7 @@ func TestCalculateProfit(t *testing.T) {
 				MaxGridExport:          10.0,
 			},
 			decision: ControlDecision{
-				BatteryCharge:    0,
+				batteryCharge:    0,
 				BatteryDischarge: 4.0,
 				GridImport:       0,
 				GridExport:       2.8,
@@ -268,7 +268,7 @@ func TestCalculateProfit(t *testing.T) {
 
 				// Debug information
 				t.Logf("Decision: Charge=%.2f, Discharge=%.2f, Import=%.2f, Export=%.2f",
-					tt.decision.BatteryCharge, tt.decision.BatteryDischarge,
+					tt.decision.batteryCharge, tt.decision.BatteryDischarge,
 					tt.decision.GridImport, tt.decision.GridExport)
 				t.Logf("Slot: Solar=%.2f, Load=%.2f, ImportPrice=%.2f, ExportPrice=%.2f",
 					tt.slot.SolarForecast, tt.slot.LoadForecast,
@@ -291,7 +291,7 @@ func TestCalculateProfitNoDegradation(t *testing.T) {
 	}
 
 	decision := ControlDecision{
-		BatteryCharge:    0,
+		batteryCharge:    0,
 		BatteryDischarge: 2.0,
 		GridImport:       0.2,
 		GridExport:       0,
@@ -332,7 +332,7 @@ func TestCalculateProfitArbitrage(t *testing.T) {
 
 	// Scenario 1: Charge during cheap prices
 	chargeDecision := ControlDecision{
-		BatteryCharge:    5.0,
+		batteryCharge:    5.0,
 		BatteryDischarge: 0,
 		GridImport:       7.556, // Load + charge/efficiency
 		GridExport:       0,
@@ -354,7 +354,7 @@ func TestCalculateProfitArbitrage(t *testing.T) {
 
 	// Scenario 2: Discharge during expensive prices with export
 	dischargeDecision := ControlDecision{
-		BatteryCharge:    0,
+		batteryCharge:    0,
 		BatteryDischarge: 4.0,
 		GridImport:       0,
 		GridExport:       0.6, // 4*0.9 - 3.0 = 0.6 exported
@@ -475,7 +475,7 @@ func TestOptimize(t *testing.T) {
 	// Verify all decisions have valid data
 	for i, dec := range decisions {
 		t.Logf("Hour %2d: SOC=%.3f, Charge=%.3f, Discharge=%.3f, Import=%.3f, Export=%.3f, Profit=%.4f, Price=%.5f/kWh",
-			i, dec.BatterySOC, dec.BatteryCharge, dec.BatteryDischarge,
+			i, dec.BatterySOC, (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid), dec.BatteryDischarge,
 			dec.GridImport, dec.GridExport, dec.Profit, dec.ImportPrice)
 
 		// Check SOC bounds
@@ -485,8 +485,8 @@ func TestOptimize(t *testing.T) {
 		}
 
 		// Check charge/discharge bounds
-		if dec.BatteryCharge > config.BatteryMaxCharge+0.001 {
-			t.Errorf("Hour %d: Charge %.3f exceeds max %.3f", i, dec.BatteryCharge, config.BatteryMaxCharge)
+		if (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid) > config.BatteryMaxCharge+0.001 {
+			t.Errorf("Hour %d: Charge %.3f exceeds max %.3f", i, (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid), config.BatteryMaxCharge)
 		}
 		if dec.BatteryDischarge > config.BatteryMaxDischarge+0.001 {
 			t.Errorf("Hour %d: Discharge %.3f exceeds max %.3f", i, dec.BatteryDischarge, config.BatteryMaxDischarge)
@@ -501,7 +501,7 @@ func TestOptimize(t *testing.T) {
 		}
 
 		// Check mutual exclusivity of charge/discharge
-		if dec.BatteryCharge > 0.001 && dec.BatteryDischarge > 0.001 {
+		if (dec.BatteryChargeFromPV+dec.BatteryChargeFromGrid) > 0.001 && dec.BatteryDischarge > 0.001 {
 			t.Errorf("Hour %d: Both charge and discharge are non-zero", i)
 		}
 
@@ -545,8 +545,8 @@ func TestOptimize(t *testing.T) {
 	t.Logf("\nHour 4 (LOWEST PRICE):")
 	t.Logf("  Import Price: %.5f/kWh", importPriceHour4)
 	t.Logf("  Export Price: %.5f/kWh", exportPriceHour4)
-	t.Logf("  Charged: %.3f kW (added %.3f kWh to battery)", hour4.BatteryCharge, hour4.BatteryCharge*0.9)
-	t.Logf("  Cost: %.4f (import + degradation)", hour4.BatteryCharge*importPriceHour4+hour4.BatteryCharge*config.BatteryDegradationCost)
+	t.Logf("  Charged: %.3f kW (added %.3f kWh to battery)", (hour4.BatteryChargeFromPV + hour4.BatteryChargeFromGrid), (hour4.BatteryChargeFromPV+hour4.BatteryChargeFromGrid)*0.9)
+	t.Logf("  Cost: %.4f (import + degradation)", (hour4.BatteryChargeFromPV+hour4.BatteryChargeFromGrid)*importPriceHour4+(hour4.BatteryChargeFromPV+hour4.BatteryChargeFromGrid)*config.BatteryDegradationCost)
 
 	t.Logf("\nHour 22 (HIGHEST PRICE):")
 	t.Logf("  Import Price: %.5f/kWh", importPriceHour22)
@@ -556,7 +556,7 @@ func TestOptimize(t *testing.T) {
 	t.Logf("  Revenue: %.4f (export - degradation)", hour22.GridExport*exportPriceHour22-hour22.BatteryDischarge*config.BatteryDegradationCost)
 
 	// Calculate theoretical max arbitrage if charged more at hour 4
-	maxAdditionalCharge := config.BatteryMaxCharge - hour4.BatteryCharge
+	maxAdditionalCharge := config.BatteryMaxCharge - (hour4.BatteryChargeFromPV + hour4.BatteryChargeFromGrid)
 	socHeadroom := (config.BatteryMaxSOC - hour4.BatterySOC) * config.BatteryCapacity
 	actualMaxCharge := math.Min(maxAdditionalCharge, socHeadroom/config.BatteryEfficiency)
 
@@ -577,10 +577,10 @@ func TestOptimize(t *testing.T) {
 	chargedTotal := 0.0
 	dischargedTotal := 0.0
 	for i, dec := range decisions {
-		if dec.BatteryCharge > 0.1 {
-			chargedTotal += dec.BatteryCharge
+		if (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid) > 0.1 {
+			chargedTotal += (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid)
 			t.Logf("  Hour %2d: CHARGED %.3f kW at price %.5f/kWh (SOC: %.3f)",
-				i, dec.BatteryCharge, dec.ImportPrice, dec.BatterySOC)
+				i, (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid), dec.ImportPrice, dec.BatterySOC)
 		}
 		if dec.BatteryDischarge > 0.1 {
 			dischargedTotal += dec.BatteryDischarge
@@ -624,7 +624,7 @@ func TestOptimize(t *testing.T) {
 	// (Not strict since it depends on SOC constraints and overall optimization)
 	lowPriceCharging := 0
 	for i := range len(hourlyPrices) {
-		if hourlyPrices[i] < (minPrice+maxPrice)/2 && decisions[i].BatteryCharge > 0.1 {
+		if hourlyPrices[i] < (minPrice+maxPrice)/2 && (decisions[i].BatteryChargeFromPV+decisions[i].BatteryChargeFromGrid) > 0.1 {
 			lowPriceCharging++
 		}
 	}
@@ -643,7 +643,7 @@ func TestOptimize(t *testing.T) {
 	for i, dec := range decisions {
 		// Power balance: Solar + GridImport + BatteryDischarge*eff = Load + GridExport + BatteryCharge/eff
 		supply := forecast[i].SolarForecast + dec.GridImport + dec.BatteryDischarge*config.BatteryEfficiency
-		demand := forecast[i].LoadForecast + dec.GridExport + dec.BatteryCharge/config.BatteryEfficiency
+		demand := forecast[i].LoadForecast + dec.GridExport + (dec.BatteryChargeFromPV+dec.BatteryChargeFromGrid)/config.BatteryEfficiency
 
 		if math.Abs(supply-demand) > 0.01 {
 			t.Errorf("Hour %d: Power balance violation. Supply=%.3f, Demand=%.3f, Diff=%.3f",
@@ -717,8 +717,8 @@ func TestOptimizeShortHorizon(t *testing.T) {
 
 	// During cheap hour, battery should tend to charge (or at least not discharge heavily)
 	// During expensive hour, battery should tend to discharge
-	t.Logf("Hour 0 (cheap): Charge=%.3f, Discharge=%.3f", decisions[0].BatteryCharge, decisions[0].BatteryDischarge)
-	t.Logf("Hour 1 (expensive): Charge=%.3f, Discharge=%.3f", decisions[1].BatteryCharge, decisions[1].BatteryDischarge)
+	t.Logf("Hour 0 (cheap): Charge=%.3f, Discharge=%.3f", (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid), decisions[0].BatteryDischarge)
+	t.Logf("Hour 1 (expensive): Charge=%.3f, Discharge=%.3f", (decisions[1].BatteryChargeFromPV + decisions[1].BatteryChargeFromGrid), decisions[1].BatteryDischarge)
 }
 
 func TestOptimizeHighLoad(t *testing.T) {
@@ -794,12 +794,12 @@ func TestOptimizeHighSolar(t *testing.T) {
 	}
 
 	// With 8 kW solar and 2 kW load, should have excess to charge or export
-	excessUsed := decisions[0].BatteryCharge + decisions[0].GridExport
+	excessUsed := (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid) + decisions[0].GridExport
 	if excessUsed <= 0 {
 		t.Error("Expected battery charging or grid export with excess solar")
 	}
 
-	t.Logf("High solar scenario: Charge=%.3f, Export=%.3f", decisions[0].BatteryCharge, decisions[0].GridExport)
+	t.Logf("High solar scenario: Charge=%.3f, Export=%.3f", (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid), decisions[0].GridExport)
 }
 
 func TestOptimizeWithBatteryPreHeat(t *testing.T) {
@@ -850,7 +850,7 @@ func TestOptimizeWithBatteryPreHeat(t *testing.T) {
 	}
 
 	// Should charge in period 0 despite battery preheating cost
-	if decisions1[0].BatteryCharge <= 0 {
+	if (decisions1[0].BatteryChargeFromPV + decisions1[0].BatteryChargeFromGrid) <= 0 {
 		t.Error("Expected battery charging in cheap period even with battery preheating")
 	}
 
@@ -859,14 +859,14 @@ func TestOptimizeWithBatteryPreHeat(t *testing.T) {
 	}
 
 	// GridImport should include load + battery charge losses + battery preheat power
-	expectedMinImport := forecast1[0].LoadForecast + decisions1[0].BatteryCharge/config.BatteryEfficiency + config.BatteryPreHeatPower
+	expectedMinImport := forecast1[0].LoadForecast + (decisions1[0].BatteryChargeFromPV+decisions1[0].BatteryChargeFromGrid)/config.BatteryEfficiency + config.BatteryPreHeatPower
 	if decisions1[0].GridImport < expectedMinImport-0.1 {
 		t.Errorf("GridImport (%.3f) should account for battery preheat power, expected at least %.3f",
 			decisions1[0].GridImport, expectedMinImport)
 	}
 
 	t.Logf("Cold battery - Period 0 (cheap): Charge=%.3f kW, GridImport=%.3f kW, BatteryPreHeat=%v",
-		decisions1[0].BatteryCharge, decisions1[0].GridImport, decisions1[0].BatteryPreHeatActive)
+		(decisions1[0].BatteryChargeFromPV + decisions1[0].BatteryChargeFromGrid), decisions1[0].GridImport, decisions1[0].BatteryPreHeatActive)
 	t.Logf("Cold battery - Period 1 (expensive): Discharge=%.3f kW, GridImport=%.3f kW",
 		decisions1[1].BatteryDischarge, decisions1[1].GridImport)
 
@@ -905,7 +905,7 @@ func TestOptimizeWithBatteryPreHeat(t *testing.T) {
 	}
 
 	// Warm battery should charge more or have lower import cost (no battery preheating)
-	if decisions2[0].BatteryCharge > 0 && decisions1[0].BatteryCharge > 0 {
+	if (decisions2[0].BatteryChargeFromPV+decisions2[0].BatteryChargeFromGrid) > 0 && (decisions1[0].BatteryChargeFromPV+decisions1[0].BatteryChargeFromGrid) > 0 {
 		// Both charging: warm battery should have lower GridImport (no battery preheating)
 		if decisions2[0].GridImport >= decisions1[0].GridImport {
 			t.Errorf("Warm battery GridImport (%.3f) should be less than cold battery GridImport (%.3f)",
@@ -914,7 +914,7 @@ func TestOptimizeWithBatteryPreHeat(t *testing.T) {
 	}
 
 	t.Logf("Warm battery - Period 0 (cheap): Charge=%.3f kW, GridImport=%.3f kW, BatteryPreHeat=%v",
-		decisions2[0].BatteryCharge, decisions2[0].GridImport, decisions2[0].BatteryPreHeatActive)
+		(decisions2[0].BatteryChargeFromPV + decisions2[0].BatteryChargeFromGrid), decisions2[0].GridImport, decisions2[0].BatteryPreHeatActive)
 	t.Logf("Warm battery - Period 1 (expensive): Discharge=%.3f kW, GridImport=%.3f kW",
 		decisions2[1].BatteryDischarge, decisions2[1].GridImport)
 
@@ -978,7 +978,7 @@ func TestOptimizeWithBatteryPreHeat(t *testing.T) {
 	}
 
 	// Period 0: Should charge at very cheap price
-	if decisions4[0].BatteryCharge > 0 && !decisions4[0].BatteryPreHeatActive {
+	if (decisions4[0].BatteryChargeFromPV+decisions4[0].BatteryChargeFromGrid) > 0 && !decisions4[0].BatteryPreHeatActive {
 		t.Error("Expected battery preheating active when charging with cold battery")
 	}
 
@@ -988,7 +988,7 @@ func TestOptimizeWithBatteryPreHeat(t *testing.T) {
 	}
 
 	t.Logf("Cold battery arbitrage - Period 0: Charge=%.3f kW, BatteryPreHeat=%v, GridImport=%.3f kW",
-		decisions4[0].BatteryCharge, decisions4[0].BatteryPreHeatActive, decisions4[0].GridImport)
+		(decisions4[0].BatteryChargeFromPV + decisions4[0].BatteryChargeFromGrid), decisions4[0].BatteryPreHeatActive, decisions4[0].GridImport)
 	t.Logf("Cold battery arbitrage - Period 1: Discharge=%.3f kW, BatteryPreHeat=%v, GridImport=%.3f kW",
 		decisions4[1].BatteryDischarge, decisions4[1].BatteryPreHeatActive, decisions4[1].GridImport)
 }
@@ -1041,8 +1041,8 @@ func TestBatteryPreHeatGridImportExceedsBatteryCharge(t *testing.T) {
 	}
 
 	// Verify charging at high rate in period 0 (may not be exactly at maximum due to optimizer granularity)
-	if decisions[0].BatteryCharge < config.BatteryMaxCharge*0.8 {
-		t.Errorf("Expected battery to charge at high rate (>80%% of max), got %.3f kW", decisions[0].BatteryCharge)
+	if (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid) < config.BatteryMaxCharge*0.8 {
+		t.Errorf("Expected battery to charge at high rate (>80%% of max), got %.3f kW", (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid))
 	}
 
 	// Verify battery preheating is active
@@ -1053,7 +1053,7 @@ func TestBatteryPreHeatGridImportExceedsBatteryCharge(t *testing.T) {
 	// Calculate expected minimum grid import:
 	// Load + Battery charge/efficiency + Battery preheat
 	expectedMinImport := forecast[0].LoadForecast +
-		decisions[0].BatteryCharge/config.BatteryEfficiency +
+		(decisions[0].BatteryChargeFromPV+decisions[0].BatteryChargeFromGrid)/config.BatteryEfficiency +
 		config.BatteryPreHeatPower
 
 	// Grid import should match the expected value
@@ -1076,8 +1076,8 @@ func TestBatteryPreHeatGridImportExceedsBatteryCharge(t *testing.T) {
 
 	t.Logf("Maximum charging scenario:")
 	t.Logf("  Load: %.3f kW", forecast[0].LoadForecast)
-	t.Logf("  Battery Charge: %.3f kW", decisions[0].BatteryCharge)
-	t.Logf("  Battery Charge (with losses): %.3f kW", decisions[0].BatteryCharge/config.BatteryEfficiency)
+	t.Logf("  Battery Charge: %.3f kW", (decisions[0].BatteryChargeFromPV + decisions[0].BatteryChargeFromGrid))
+	t.Logf("  Battery Charge (with losses): %.3f kW", (decisions[0].BatteryChargeFromPV+decisions[0].BatteryChargeFromGrid)/config.BatteryEfficiency)
 	t.Logf("  Battery PreHeat: %.3f kW", config.BatteryPreHeatPower)
 	t.Logf("  Total Grid Import: %.3f kW", decisions[0].GridImport)
 	t.Logf("  Grid Import exceeds BatteryMaxCharge by: %.3f kW",
@@ -1142,18 +1142,18 @@ func TestBatteryTemperatureThermalDynamics(t *testing.T) {
 
 	// Verify battery is not charging (prices too high)
 	for i, dec := range decisions1 {
-		if dec.BatteryCharge > 0.1 {
-			t.Errorf("Period %d: Expected no charging at high prices, got %.3f kW", i, dec.BatteryCharge)
+		if (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid) > 0.1 {
+			t.Errorf("Period %d: Expected no charging at high prices, got %.3f kW", i, (dec.BatteryChargeFromPV + dec.BatteryChargeFromGrid))
 		}
 	}
 
 	t.Logf("Battery warming scenario:")
 	t.Logf("  Period 0: Battery %.1f°C, Air %.1f°C, Charging: %.3f kW",
-		decisions1[0].BatteryAvgCellTemp, forecast1[0].AirTemperature, decisions1[0].BatteryCharge)
+		decisions1[0].BatteryAvgCellTemp, forecast1[0].AirTemperature, (decisions1[0].BatteryChargeFromPV + decisions1[0].BatteryChargeFromGrid))
 	t.Logf("  Period 1: Battery %.1f°C, Air %.1f°C, Charging: %.3f kW",
-		decisions1[1].BatteryAvgCellTemp, forecast1[1].AirTemperature, decisions1[1].BatteryCharge)
+		decisions1[1].BatteryAvgCellTemp, forecast1[1].AirTemperature, (decisions1[1].BatteryChargeFromPV + decisions1[1].BatteryChargeFromGrid))
 	t.Logf("  Period 2: Battery %.1f°C, Air %.1f°C, Charging: %.3f kW",
-		decisions1[2].BatteryAvgCellTemp, forecast1[2].AirTemperature, decisions1[2].BatteryCharge)
+		decisions1[2].BatteryAvgCellTemp, forecast1[2].AirTemperature, (decisions1[2].BatteryChargeFromPV + decisions1[2].BatteryChargeFromGrid))
 
 	// Test 2: Warm battery cooling down toward cold air temperature (no charging)
 	forecast2 := []TimeSlot{
@@ -1196,11 +1196,11 @@ func TestBatteryTemperatureThermalDynamics(t *testing.T) {
 
 	t.Logf("Battery cooling scenario:")
 	t.Logf("  Period 0: Battery %.1f°C, Air %.1f°C, Charging: %.3f kW",
-		decisions2[0].BatteryAvgCellTemp, forecast2[0].AirTemperature, decisions2[0].BatteryCharge)
+		decisions2[0].BatteryAvgCellTemp, forecast2[0].AirTemperature, (decisions2[0].BatteryChargeFromPV + decisions2[0].BatteryChargeFromGrid))
 	t.Logf("  Period 1: Battery %.1f°C, Air %.1f°C, Charging: %.3f kW",
-		decisions2[1].BatteryAvgCellTemp, forecast2[1].AirTemperature, decisions2[1].BatteryCharge)
+		decisions2[1].BatteryAvgCellTemp, forecast2[1].AirTemperature, (decisions2[1].BatteryChargeFromPV + decisions2[1].BatteryChargeFromGrid))
 	t.Logf("  Period 2: Battery %.1f°C, Air %.1f°C, Charging: %.3f kW",
-		decisions2[2].BatteryAvgCellTemp, forecast2[2].AirTemperature, decisions2[2].BatteryCharge)
+		decisions2[2].BatteryAvgCellTemp, forecast2[2].AirTemperature, (decisions2[2].BatteryChargeFromPV + decisions2[2].BatteryChargeFromGrid))
 
 	// Test 3: Verify temperature forecasting enables optimizer to make smart decisions
 	// Cold battery that stays cold (no natural warming) - optimizer should see preheating cost
@@ -1249,7 +1249,7 @@ func TestBatteryTemperatureThermalDynamics(t *testing.T) {
 	// - Should still charge when profitable despite preheating cost
 
 	// Verify some charging happens during cheap periods
-	totalCharging := decisions3[0].BatteryCharge + decisions3[1].BatteryCharge
+	totalCharging := (decisions3[0].BatteryChargeFromPV + decisions3[0].BatteryChargeFromGrid) + (decisions3[1].BatteryChargeFromPV + decisions3[1].BatteryChargeFromGrid)
 	if totalCharging <= 0 {
 		t.Error("Expected some charging during cheap price periods (0-1) despite cold battery")
 	}
@@ -1257,7 +1257,7 @@ func TestBatteryTemperatureThermalDynamics(t *testing.T) {
 	// When charging happens in cold conditions, preheating should be active
 	// Note: Once battery reaches threshold temp via preheating, it may charge without preheating in subsequent periods
 	for i := 0; i < 2; i++ {
-		if decisions3[i].BatteryCharge > 0.1 {
+		if (decisions3[i].BatteryChargeFromPV + decisions3[i].BatteryChargeFromGrid) > 0.1 {
 			// Only check preheating if battery temp is strictly below threshold
 			if decisions3[i].BatteryAvgCellTemp < config.BatteryPreHeatTempThreshold {
 				if !decisions3[i].BatteryPreHeatActive {
@@ -1269,17 +1269,17 @@ func TestBatteryTemperatureThermalDynamics(t *testing.T) {
 	}
 
 	// Period 2: Should not charge at expensive price
-	if decisions3[2].BatteryCharge > 0.1 {
+	if (decisions3[2].BatteryChargeFromPV + decisions3[2].BatteryChargeFromGrid) > 0.1 {
 		t.Error("Expected no charging in period 2 at expensive prices")
 	}
 
 	t.Logf("Battery temperature forecasting enables smart optimization:")
 	t.Logf("  Period 0: Battery %.1f°C, Air %.1f°C, Charge: %.3f kW, PreHeat: %v",
-		decisions3[0].BatteryAvgCellTemp, forecast3[0].AirTemperature, decisions3[0].BatteryCharge, decisions3[0].BatteryPreHeatActive)
+		decisions3[0].BatteryAvgCellTemp, forecast3[0].AirTemperature, (decisions3[0].BatteryChargeFromPV + decisions3[0].BatteryChargeFromGrid), decisions3[0].BatteryPreHeatActive)
 	t.Logf("  Period 1: Battery %.1f°C, Air %.1f°C, Charge: %.3f kW, PreHeat: %v",
-		decisions3[1].BatteryAvgCellTemp, forecast3[1].AirTemperature, decisions3[1].BatteryCharge, decisions3[1].BatteryPreHeatActive)
+		decisions3[1].BatteryAvgCellTemp, forecast3[1].AirTemperature, (decisions3[1].BatteryChargeFromPV + decisions3[1].BatteryChargeFromGrid), decisions3[1].BatteryPreHeatActive)
 	t.Logf("  Period 2: Battery %.1f°C, Air %.1f°C, Charge: %.3f kW, PreHeat: %v",
-		decisions3[2].BatteryAvgCellTemp, forecast3[2].AirTemperature, decisions3[2].BatteryCharge, decisions3[2].BatteryPreHeatActive)
+		decisions3[2].BatteryAvgCellTemp, forecast3[2].AirTemperature, (decisions3[2].BatteryChargeFromPV + decisions3[2].BatteryChargeFromGrid), decisions3[2].BatteryPreHeatActive)
 	t.Logf("  Note: Optimizer accounts for temperature forecasts and preheating costs in all periods")
 }
 
@@ -1344,7 +1344,7 @@ func TestNegativeExportPriceNoGridExport(t *testing.T) {
 	t.Logf("Negative export price results:")
 	for i, d := range decisions {
 		t.Logf("  Slot %d: Charge=%.3f kW, Discharge=%.3f kW, GridExport=%.3f kW, GridImport=%.3f kW, Profit=%.4f",
-			i, d.BatteryCharge, d.BatteryDischarge, d.GridExport, d.GridImport, d.Profit)
+			i, (d.BatteryChargeFromPV + d.BatteryChargeFromGrid), d.BatteryDischarge, d.GridExport, d.GridImport, d.Profit)
 	}
 }
 
@@ -1466,7 +1466,7 @@ func TestZeroExportPriceNoGridExport(t *testing.T) {
 	t.Logf("Zero export price results:")
 	for i, d := range decisions {
 		t.Logf("  Slot %d: Charge=%.3f kW, Discharge=%.3f kW, GridExport=%.3f kW, GridImport=%.3f kW, Profit=%.4f",
-			i, d.BatteryCharge, d.BatteryDischarge, d.GridExport, d.GridImport, d.Profit)
+			i, (d.BatteryChargeFromPV + d.BatteryChargeFromGrid), d.BatteryDischarge, d.GridExport, d.GridImport, d.Profit)
 	}
 }
 
@@ -1608,6 +1608,83 @@ func TestOptimize_SolarSufficientSuppressesGridCharging(t *testing.T) {
 		}
 		t.Logf("slot %d: ChargeFromPV=%.3f kW, ChargeFromGrid=%.3f kW, SOC=%.3f, Solar=%.1f kW",
 			i, d.BatteryChargeFromPV, d.BatteryChargeFromGrid, d.BatterySOC, forecast[i].SolarForecast)
+	}
+}
+
+// TestOptimize_DecisionsAreInternallyConsistentAfterSuppression verifies that when
+// grid charging is suppressed by the solar-sufficiency heuristic (same scenario as
+// TestOptimize_SolarSufficientSuppressesGridCharging), the returned decision's
+// GridImport/GridExport, legacy BatteryCharge, and BatterySOC fields are recomputed
+// to match the actual (possibly zero) charge — not the higher charge rate the
+// with-solar DP scenario originally assumed before the PV/grid split.
+func TestOptimize_DecisionsAreInternallyConsistentAfterSuppression(t *testing.T) {
+	config := SystemConfig{
+		BatteryCapacity:        10.0, // kWh
+		BatteryMaxCharge:       5.0,  // kW
+		BatteryMaxDischarge:    5.0,  // kW
+		BatteryMinSOC:          0.1,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.9,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	forecast := []TimeSlot{
+		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.0, LoadForecast: 0.5},
+		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 2, Timestamp: 1704333600, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 3, Timestamp: 1704337200, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 4, Timestamp: 1704340800, ImportPrice: 0.30, ExportPrice: 0.15, SolarForecast: 0.0, LoadForecast: 0.5},
+	}
+
+	ctrl := NewController(config, len(forecast), 0.1)
+	decisions := ctrl.Optimize(forecast)
+	if len(decisions) != len(forecast) {
+		t.Fatalf("expected %d decisions, got %d", len(forecast), len(decisions))
+	}
+
+	runningSOC := 0.1
+	for i, d := range decisions {
+		slot := forecast[i]
+
+		totalCharge := d.BatteryChargeFromPV + d.BatteryChargeFromGrid
+
+		extraLoad := 0.0
+		if d.BatteryPreHeatActive {
+			extraLoad = config.BatteryPreHeatPower
+		}
+		netSupply := slot.SolarForecast + d.BatteryDischarge*config.BatteryEfficiency
+		netLoad := slot.LoadForecast + totalCharge/config.BatteryEfficiency + extraLoad
+		wantBalance := netSupply - netLoad
+
+		if wantBalance > 0 {
+			if d.GridImport > 1e-9 {
+				t.Errorf("slot %d: expected GridImport 0 given a supply surplus, got %.4f", i, d.GridImport)
+			}
+		} else if math.Abs(d.GridImport-(-wantBalance)) > 1e-6 {
+			t.Errorf("slot %d: GridImport %.4f inconsistent with actual charge/discharge (expected %.4f)", i, d.GridImport, -wantBalance)
+		}
+
+		runningSOC = ctrl.calculateNewSOC(runningSOC, totalCharge, d.BatteryDischarge)
+		if math.Abs(d.BatterySOC-runningSOC) > 1e-6 {
+			t.Errorf("slot %d: BatterySOC %.4f does not match SOC %.4f forward-simulated from the actual charge/discharge", i, d.BatterySOC, runningSOC)
+		}
+	}
+
+	// Slot 0 specifically mirrors the reported bug: no PV surplus (solar < load)
+	// and grid charging suppressed for the whole horizon (solar sufficient overall).
+	// The actual charge must be 0, and GridImport must reflect only the load
+	// deficit — not a stale value sized for a charge that never happens.
+	if decisions[0].BatteryChargeFromPV != 0 || decisions[0].BatteryChargeFromGrid != 0 {
+		t.Fatalf("expected no charge in slot 0, got PV=%.4f kW Grid=%.4f kW",
+			decisions[0].BatteryChargeFromPV, decisions[0].BatteryChargeFromGrid)
+	}
+	wantImport := forecast[0].LoadForecast - forecast[0].SolarForecast
+	if math.Abs(decisions[0].GridImport-wantImport) > 1e-9 {
+		t.Errorf("slot 0: GridImport = %.4f kW, want %.4f kW (load only, no stale charge-driven import)",
+			decisions[0].GridImport, wantImport)
 	}
 }
 
