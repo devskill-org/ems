@@ -83,6 +83,14 @@ type ControlDecision struct {
 	WeatherSymbol      string  // weather condition symbol
 	BatteryAvgCellTemp float64 // °C average cell temperature
 	AirTemperature     float64 // °C air temperature
+	// BalancingNeeded reports whether this optimisation run determined that
+	// weekly cell-balancing (charging to BatteryMaxSOC) should be incentivised.
+	// It is the same value for every decision returned by a given Optimize
+	// call, since needsWeeklyBalancing is evaluated once per run. Callers can
+	// use it to distinguish "battery is full because balancing was due" from
+	// "battery is full incidentally", e.g. to avoid opportunistically pushing
+	// SOC toward BatteryMaxSOC outside of the weekly balancing window.
+	BalancingNeeded bool
 }
 
 // Controller implements Model Predictive Control
@@ -284,6 +292,8 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 		// calculateProfit(dec, slot) before any cell-balancing bonus, which is
 		// tracked separately and not part of this per-slot field).
 		finalDecisions[i].Profit = mpc.calculateProfit(finalDecisions[i], slot)
+
+		finalDecisions[i].BalancingNeeded = needsBalancing
 	}
 
 	return finalDecisions

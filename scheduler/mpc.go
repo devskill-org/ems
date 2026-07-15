@@ -671,7 +671,12 @@ type batteryAction struct {
 // charge rate, grid charging is suppressed and the inverter is switched to
 // PV-only self-use mode instead.  Pass 0 to disable the gate (e.g. in tests
 // that are not exercising the cloud-recovery logic).
-func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recentAvgPV float64) batteryAction {
+//
+// balancingSOCThreshold is the SOC (0-1) at/above which the battery enters its
+// low-efficiency CV/balancing phase (config.BatteryBalancingSOCThreshold).
+// Pass 0 to disable the related guard in the default case below (e.g. in
+// tests, or when the feature is disabled in config).
+func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recentAvgPV float64, balancingSOCThreshold float64) batteryAction {
 	switch {
 	case decision.BatteryChargeFromGrid > 0.01:
 		totalPlannedCharge := decision.BatteryChargeFromPV + decision.BatteryChargeFromGrid
@@ -752,14 +757,28 @@ func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recen
 		// forecasts can underestimate solar (e.g. clouds clearing sooner
 		// than expected) — while keeping discharge capped at 0 so the
 		// battery doesn't drain against the plan.
+		//
+		// Exception: if the battery is already at/above the balancing SOC
+		// threshold and this optimisation run did not call for weekly
+		// cell-balancing, don't opportunistically chase the remaining
+		// headroom up to BatteryMaxSOC. Doing so would push the battery into
+		// its low-efficiency CV/balancing phase every time PV surplus is
+		// available, rather than only once a week as intended.
+		chargeLimit := maxCharge
+		logMsg := fmt.Sprintf("Setting battery to SELF-CONSUMPTION mode (no active charge/discharge planned, absorbing any actual PV excess up to %.1f kW): GridImport: %.1f kW, GridExport: %.1f kW",
+			maxCharge, decision.GridImport, decision.GridExport)
+		if balancingSOCThreshold > 0 && !decision.BalancingNeeded && decision.BatterySOC >= balancingSOCThreshold {
+			chargeLimit = 0
+			logMsg = fmt.Sprintf("Setting battery to SELF-CONSUMPTION mode (SOC %.1f%% already at/above balancing threshold %.1f%% and balancing not currently needed — capping charge at 0 to avoid unnecessary CV/balancing): GridImport: %.1f kW, GridExport: %.1f kW",
+				decision.BatterySOC*100, balancingSOCThreshold*100, decision.GridImport, decision.GridExport)
+		}
 		return batteryAction{
 			mode:           2,
-			chargeLimit:    maxCharge,
+			chargeLimit:    chargeLimit,
 			dischargeLimit: 0,
 			setCharge:      true,
 			setDischarge:   true,
-			logMsg: fmt.Sprintf("Setting battery to SELF-CONSUMPTION mode (no active charge/discharge planned, absorbing any actual PV excess up to %.1f kW): GridImport: %.1f kW, GridExport: %.1f kW",
-				maxCharge, decision.GridImport, decision.GridExport),
+			logMsg:         logMsg,
 		}
 	}
 }
@@ -801,7 +820,7 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	const pvGateWindow = 5 * time.Minute
 	recentAvgPV := s.dataSamples.AveragePVPowerLast(pvGateWindow)
 
-	action := decideBatteryAction(decision, config.BatteryMaxCharge, recentAvgPV)
+	action := decideBatteryAction(decision, config.BatteryMaxCharge, recentAvgPV, config.BatteryBalancingSOCThreshold)
 	s.logger.Print(action.logMsg)
 
 	// Enforce hardware-level grid export limit based on the current export price.

@@ -699,7 +699,7 @@ func TestDecideBatteryAction_DischargeNegativeExportUsesMode2(t *testing.T) {
 		BatteryChargeFromGrid: 0,
 		BatteryChargeFromPV:   0,
 	}
-	action := decideBatteryAction(decision, 5.0, 0.0)
+	action := decideBatteryAction(decision, 5.0, 0.0, 0)
 	if action.mode != 2 {
 		t.Errorf("expected mode 2, got %d", action.mode)
 	}
@@ -715,7 +715,7 @@ func TestDecideBatteryAction_DischargeZeroExportUsesMode2(t *testing.T) {
 		BatteryChargeFromGrid: 0,
 		BatteryChargeFromPV:   0,
 	}
-	action := decideBatteryAction(decision, 5.0, 0.0)
+	action := decideBatteryAction(decision, 5.0, 0.0, 0)
 	if action.mode != 2 {
 		t.Errorf("expected mode 2, got %d", action.mode)
 	}
@@ -734,7 +734,7 @@ func TestDecideBatteryAction_DischargeWithPlannedGridExportUsesMode5(t *testing.
 		BatteryChargeFromGrid: 0,
 		BatteryChargeFromPV:   0,
 	}
-	action := decideBatteryAction(decision, 5.0, 0.0)
+	action := decideBatteryAction(decision, 5.0, 0.0, 0)
 	if action.mode != 5 {
 		t.Errorf("expected mode 5, got %d", action.mode)
 	}
@@ -764,7 +764,7 @@ func TestDecideBatteryAction_DefaultUsesSelfConsumptionNotIdle(t *testing.T) {
 		GridImport:            5.0,
 		GridExport:            0,
 	}
-	action := decideBatteryAction(decision, 10.0, 0.0)
+	action := decideBatteryAction(decision, 10.0, 0.0, 0)
 
 	if action.mode != 2 {
 		t.Errorf("expected mode 2 (self-consumption), got %d", action.mode)
@@ -783,6 +783,81 @@ func TestDecideBatteryAction_DefaultUsesSelfConsumptionNotIdle(t *testing.T) {
 	}
 }
 
+// TestDecideBatteryAction_DefaultCapsChargeAtBalancingThresholdWhenNotNeeded
+// verifies that when the battery is already at/above the balancing SOC
+// threshold and this optimisation run did not call for weekly cell-balancing,
+// the opportunistic self-consumption charge limit is capped at 0 instead of
+// maxCharge — preventing the battery from being pushed toward 100% (and into
+// its low-efficiency CV/balancing phase) every time PV surplus is available.
+func TestDecideBatteryAction_DefaultCapsChargeAtBalancingThresholdWhenNotNeeded(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatteryChargeFromPV:   0,
+		BatteryChargeFromGrid: 0,
+		BatteryDischarge:      0,
+		GridImport:            0,
+		GridExport:            10.9,
+		BatterySOC:            0.999, // 99.9%
+		BalancingNeeded:       false,
+	}
+	action := decideBatteryAction(decision, 20.0, 0.0, 0.998)
+
+	if action.mode != 2 {
+		t.Errorf("expected mode 2 (self-consumption), got %d", action.mode)
+	}
+	if action.chargeLimit != 0 {
+		t.Errorf("expected chargeLimit capped at 0, got %.2f", action.chargeLimit)
+	}
+	if action.dischargeLimit != 0 {
+		t.Errorf("expected dischargeLimit 0, got %.2f", action.dischargeLimit)
+	}
+}
+
+// TestDecideBatteryAction_DefaultAllowsChargeAtThresholdWhenBalancingNeeded
+// verifies that the cap above does NOT apply when this optimisation run did
+// call for weekly cell-balancing — the battery should still be allowed to
+// reach BatteryMaxSOC in that case.
+func TestDecideBatteryAction_DefaultAllowsChargeAtThresholdWhenBalancingNeeded(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatterySOC:      0.999,
+		BalancingNeeded: true,
+	}
+	action := decideBatteryAction(decision, 20.0, 0.0, 0.998)
+
+	if action.chargeLimit != 20.0 {
+		t.Errorf("expected chargeLimit raised to maxCharge 20.0 when balancing is needed, got %.2f", action.chargeLimit)
+	}
+}
+
+// TestDecideBatteryAction_DefaultAllowsChargeBelowThreshold verifies that the
+// cap only applies once SOC reaches the balancing threshold — below it, the
+// battery should still opportunistically absorb PV surplus up to maxCharge.
+func TestDecideBatteryAction_DefaultAllowsChargeBelowThreshold(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatterySOC:      0.95,
+		BalancingNeeded: false,
+	}
+	action := decideBatteryAction(decision, 20.0, 0.0, 0.998)
+
+	if action.chargeLimit != 20.0 {
+		t.Errorf("expected chargeLimit raised to maxCharge 20.0 below threshold, got %.2f", action.chargeLimit)
+	}
+}
+
+// TestDecideBatteryAction_DefaultThresholdDisabled verifies that passing 0 for
+// balancingSOCThreshold disables the guard entirely (e.g. when the balancing
+// feature is disabled in config), regardless of SOC.
+func TestDecideBatteryAction_DefaultThresholdDisabled(t *testing.T) {
+	decision := &mpc.ControlDecision{
+		BatterySOC:      0.999,
+		BalancingNeeded: false,
+	}
+	action := decideBatteryAction(decision, 20.0, 0.0, 0)
+
+	if action.chargeLimit != 20.0 {
+		t.Errorf("expected chargeLimit raised to maxCharge 20.0 when threshold guard is disabled, got %.2f", action.chargeLimit)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // PV recovery gate tests (grid charging suppression when cloud clears)
 // ---------------------------------------------------------------------------
@@ -797,7 +872,7 @@ func TestDecideBatteryAction_GridCharge_GateSuppressesWhenPVCoversAll(t *testing
 		LoadForecast:          4.0,
 	}
 	// recentAvgPV = 9.0 >= load(4.0) + charge(5.0) → gate fires
-	action := decideBatteryAction(decision, 12.0, 9.0)
+	action := decideBatteryAction(decision, 12.0, 9.0, 0)
 
 	if action.mode != 2 {
 		t.Errorf("expected mode 2 (PV-only) after gate, got %d", action.mode)
@@ -821,7 +896,7 @@ func TestDecideBatteryAction_GridCharge_GateDoesNotFireWhenPVInsufficient(t *tes
 		LoadForecast:          4.0,
 	}
 	// recentAvgPV = 8.9 < load(4.0) + charge(5.0) = 9.0 → gate must NOT fire
-	action := decideBatteryAction(decision, 12.0, 8.9)
+	action := decideBatteryAction(decision, 12.0, 8.9, 0)
 
 	if action.mode != 4 {
 		t.Errorf("expected mode 4 (grid+PV) when PV insufficient, got %d", action.mode)
@@ -837,7 +912,7 @@ func TestDecideBatteryAction_GridCharge_GateDoesNotFireWhenRecentPVIsZero(t *tes
 		LoadForecast:          0.0,
 	}
 	// recentAvgPV = 0 → gate must NOT fire even though load is also 0
-	action := decideBatteryAction(decision, 12.0, 0.0)
+	action := decideBatteryAction(decision, 12.0, 0.0, 0)
 
 	if action.mode != 4 {
 		t.Errorf("expected mode 4 when recentAvgPV is 0, got %d", action.mode)
@@ -853,7 +928,7 @@ func TestDecideBatteryAction_GridCharge_GateAtExactThreshold(t *testing.T) {
 		LoadForecast:          3.0,
 	}
 	// threshold = load(3.0) + charge(3.0) = 6.0; pass exactly 6.0 → gate fires
-	action := decideBatteryAction(decision, 12.0, 6.0)
+	action := decideBatteryAction(decision, 12.0, 6.0, 0)
 
 	if action.mode != 2 {
 		t.Errorf("expected mode 2 at exact threshold, got %d", action.mode)
@@ -869,7 +944,7 @@ func TestDecideBatteryAction_GridCharge_LimitClampedToMaxCharge(t *testing.T) {
 		LoadForecast:          1.0,
 	}
 	// recentAvgPV = 10.0 >= load(1.0) + charge(9.0) → gate fires
-	action := decideBatteryAction(decision, 8.0, 10.0) // maxCharge = 8.0
+	action := decideBatteryAction(decision, 8.0, 10.0, 0) // maxCharge = 8.0
 
 	if action.mode != 2 {
 		t.Errorf("expected mode 2, got %d", action.mode)
