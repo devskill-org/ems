@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -173,4 +174,112 @@ func TestGetCurrentPrice_InvalidLocation(t *testing.T) {
 	}
 
 	t.Logf("Correctly handled invalid timezone with error: %v", err)
+}
+
+// TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices validates that uploading
+// market data XML invalidates cached prices, merges next day data, and re-runs MPC.
+func TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices(t *testing.T) {
+	xmlData, err := os.ReadFile("../test_data/Energy_Prices_202609012200-202609022200.xml")
+	if err != nil {
+		t.Fatalf("Failed to read test data file: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		w.Write(xmlData)
+	}))
+	defer server.Close()
+
+	config := &Config{
+		SecurityToken:      "test-token",
+		URLFormat:          server.URL + "?periodStart=%s&periodEnd=%s&token=%s",
+		Location:           "UTC",
+		UserAgent:          "test-agent/1.0",
+		PriceLimit:         100.0,
+		CheckPriceInterval: 15 * time.Minute,
+		DryRun:             true,
+	}
+
+	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
+	scheduler := NewMinerScheduler(config, logger)
+
+	ctx := context.Background()
+	dateKey := "2026-09-02"
+
+	err = scheduler.StoreMarketDataXML(dateKey, xmlData)
+	if err != nil {
+		t.Fatalf("StoreMarketDataXML failed: %v", err)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	marketData, err := scheduler.GetMarketData(ctx)
+	if err != nil {
+		t.Fatalf("GetMarketData failed: %v", err)
+	}
+
+	if marketData == nil {
+		t.Fatal("Expected non-nil marketData")
+	}
+
+	decisions := scheduler.GetMPCDecisions()
+	if len(decisions) == 0 {
+		t.Errorf("Expected MPC decisions to be generated after uploading XML, got 0")
+	}
+}
+
+// TestMarketDataDownloadHandler validates the GET /api/market-data/download endpoint
+func TestMarketDataDownloadHandler(t *testing.T) {
+	xmlData, err := os.ReadFile("../test_data/Energy_Prices_202609012200-202609022200.xml")
+	if err != nil {
+		t.Fatalf("Failed to read test data file: %v", err)
+	}
+
+	config := &Config{
+		Location: "UTC",
+		DryRun:   true,
+	}
+
+	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
+	sched := NewMinerScheduler(config, logger)
+	webServer := NewWebServer(sched, 8088)
+
+	dateKey := "2026-09-02"
+	err = sched.StoreMarketDataXML(dateKey, xmlData)
+	if err != nil {
+		t.Fatalf("StoreMarketDataXML failed: %v", err)
+	}
+
+	// Test downloading specific date
+	req := httptest.NewRequest(http.MethodGet, "/api/market-data/download?date="+dateKey, nil)
+	w := httptest.NewRecorder()
+
+	webServer.marketDataDownloadHandler(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/xml" {
+		t.Errorf("Expected Content-Type application/xml, got %s", contentType)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) != len(xmlData) {
+		t.Errorf("Expected body length %d, got %d", len(xmlData), len(body))
+	}
+
+	// Test non-existent date
+	req404 := httptest.NewRequest(http.MethodGet, "/api/market-data/download?date=1999-01-01", nil)
+	w404 := httptest.NewRecorder()
+
+	webServer.marketDataDownloadHandler(w404, req404)
+
+	resp404 := w404.Result()
+	if resp404.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status 404 for missing date, got %d", resp404.StatusCode)
+	}
 }

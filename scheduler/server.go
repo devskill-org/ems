@@ -149,6 +149,7 @@ func NewWebServer(scheduler *MinerScheduler, port int) *WebServer {
 	mux.HandleFunc("/api/config", hs.configHandler)
 	mux.HandleFunc("/api/market-data/upload", hs.marketDataUploadHandler)
 	mux.HandleFunc("/api/market-data/cache", hs.marketDataCacheHandler)
+	mux.HandleFunc("/api/market-data/download", hs.marketDataDownloadHandler)
 
 	// Serve static files from web folder
 	fs := http.FileServer(http.Dir("./web/dist"))
@@ -842,6 +843,38 @@ func (hs *WebServer) marketDataCacheHandler(w http.ResponseWriter, r *http.Reque
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// marketDataDownloadHandler handles GET /api/market-data/download.
+// Optional query parameter: ?date=YYYY-MM-DD
+// Returns the raw XML document for the specified date (or today's date if omitted).
+func (hs *WebServer) marketDataDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		location, err := time.LoadLocation(hs.scheduler.config.Location)
+		if err != nil {
+			location = time.UTC
+		}
+		date = time.Now().In(location).Format("2006-01-02")
+	}
+
+	rawXML, ok := hs.scheduler.xmlCache.GetRaw(date)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("no XML document found for date %s", date)})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"Energy_Prices_%s.xml\"", date))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(rawXML)
 }
 
 func formatUptime(d time.Duration) string {

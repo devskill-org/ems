@@ -2,8 +2,10 @@
 package entsoe
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -51,6 +53,9 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 
 	now := time.Now().In(location)
 	client := NewAPIClient()
+	opts := &DownloadOptions{
+		UserAgent: client.userAgent,
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -68,40 +73,42 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 		url := buildPublicationMarketDataURL(securityToken, urlFormat, now)
 		fmt.Println(url)
 		var err error
-		marketDocument, err = client.DownloadPublicationMarketData(ctx, url)
+		var rawXML []byte
+		marketDocument, rawXML, err = DownloadPublicationMarketDataWithRaw(ctx, url, opts)
 		if err != nil {
 			return nil, err
 		}
 		if cache != nil {
-			cache.StoreDocument(todayKey, marketDocument, CacheSourceDownload)
+			cache.StoreDocumentWithRaw(todayKey, marketDocument, rawXML, CacheSourceDownload)
 		}
 	}
 
-	// If instructed, also retrieve data for the next day.
-	if fetchNextDay {
-		tomorrow := now.AddDate(0, 0, 1)
-		tomorrowKey := tomorrow.Format("2006-01-02")
+	// Retrieve data for the next day – use cache when available, or fetch if fetchNextDay is true.
+	tomorrow := now.AddDate(0, 0, 1)
+	tomorrowKey := tomorrow.Format("2006-01-02")
 
-		var marketDocumentNextDay *PublicationMarketData
+	var marketDocumentNextDay *PublicationMarketData
+	if cache != nil {
+		if cached, ok := cache.Get(tomorrowKey); ok {
+			fmt.Printf("Using cached market data for %s\n", tomorrowKey)
+			marketDocumentNextDay = cached
+		}
+	}
+
+	if marketDocumentNextDay == nil && fetchNextDay {
+		urlNextDay := buildPublicationMarketDataURL(securityToken, urlFormat, tomorrow)
+		var err error
+		var rawXMLNextDay []byte
+		marketDocumentNextDay, rawXMLNextDay, err = DownloadPublicationMarketDataWithRaw(ctx, urlNextDay, opts)
+		if err != nil {
+			return nil, err
+		}
 		if cache != nil {
-			if cached, ok := cache.Get(tomorrowKey); ok {
-				fmt.Printf("Using cached market data for %s\n", tomorrowKey)
-				marketDocumentNextDay = cached
-			}
+			cache.StoreDocumentWithRaw(tomorrowKey, marketDocumentNextDay, rawXMLNextDay, CacheSourceDownload)
 		}
+	}
 
-		if marketDocumentNextDay == nil {
-			urlNextDay := buildPublicationMarketDataURL(securityToken, urlFormat, tomorrow)
-			var err error
-			marketDocumentNextDay, err = client.DownloadPublicationMarketData(ctx, urlNextDay)
-			if err != nil {
-				return nil, err
-			}
-			if cache != nil {
-				cache.StoreDocument(tomorrowKey, marketDocumentNextDay, CacheSourceDownload)
-			}
-		}
-
+	if marketDocumentNextDay != nil {
 		// Merge the data from both days
 		marketDocument = mergePublicationMarketData(marketDocument, marketDocumentNextDay)
 	}
@@ -144,8 +151,14 @@ func mergePublicationMarketData(first *PublicationMarketData, second *Publicatio
 
 // DownloadPublicationMarketDataWithOptions downloads and decodes a PublicationMarketData with custom options
 func DownloadPublicationMarketDataWithOptions(ctx context.Context, apiURL string, opts *DownloadOptions) (*PublicationMarketData, error) {
+	doc, _, err := DownloadPublicationMarketDataWithRaw(ctx, apiURL, opts)
+	return doc, err
+}
+
+// DownloadPublicationMarketDataWithRaw downloads and decodes a PublicationMarketData along with its raw XML bytes
+func DownloadPublicationMarketDataWithRaw(ctx context.Context, apiURL string, opts *DownloadOptions) (*PublicationMarketData, []byte, error) {
 	if apiURL == "" {
-		return nil, fmt.Errorf("API URL cannot be empty")
+		return nil, nil, fmt.Errorf("API URL cannot be empty")
 	}
 
 	client := &http.Client{}
@@ -153,41 +166,48 @@ func DownloadPublicationMarketDataWithOptions(ctx context.Context, apiURL string
 	// Create HTTP request with context
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	// Set default headers
 	userAgent := "entsoe-go-client/1.0"
-	if opts.UserAgent != "" {
+	if opts != nil && opts.UserAgent != "" {
 		userAgent = opts.UserAgent
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "application/xml, text/xml")
 
 	// Set custom headers
-	for key, value := range opts.Headers {
-		req.Header.Set(key, value)
+	if opts != nil {
+		for key, value := range opts.Headers {
+			req.Header.Set(key, value)
+		}
 	}
 
 	// Execute the request
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute HTTP request: %w", err)
+		return nil, nil, fmt.Errorf("failed to execute HTTP request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Check HTTP status code
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, resp.Status)
+		return nil, nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	rawBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	// Decode the XML response using the existing decoder
-	doc, err := DecodeEnergyPricesXML(resp.Body)
+	doc, err := DecodeEnergyPricesXML(bytes.NewReader(rawBytes))
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode XML response: %w", err)
+		return nil, nil, fmt.Errorf("failed to decode XML response: %w", err)
 	}
 
-	return doc, nil
+	return doc, rawBytes, nil
 }
 
 // ValidateAPIURL performs basic validation on the API URL

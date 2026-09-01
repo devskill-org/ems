@@ -11,12 +11,37 @@ import (
 // StoreMarketDataXML parses the given XML bytes and stores the resulting document
 // in the XML document cache under the given date key (YYYY-MM-DD format).
 func (s *MinerScheduler) StoreMarketDataXML(date string, xmlData []byte) error {
-	return s.xmlCache.Store(date, xmlData)
+	if err := s.xmlCache.Store(date, xmlData); err != nil {
+		return err
+	}
+	go s.refreshMarketDataAndMPC()
+	return nil
 }
 
 // DeleteMarketDataXML removes the cached XML document for the given date key.
 func (s *MinerScheduler) DeleteMarketDataXML(date string) {
 	s.xmlCache.Delete(date)
+	go s.refreshMarketDataAndMPC()
+}
+
+// refreshMarketDataAndMPC invalidates cached prices market data and triggers GetMarketData
+// followed by RunMPCOptimize to ensure MPC optimization decisions are updated immediately.
+func (s *MinerScheduler) refreshMarketDataAndMPC() {
+	s.mu.Lock()
+	s.pricesMarketData = nil
+	s.pricesMarketDataExpiry = time.Time{}
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := s.GetMarketData(ctx); err != nil {
+		s.logger.Printf("Warning: failed to refresh market data after cache update: %v", err)
+	}
+
+	if err := s.RunMPCOptimize(ctx); err != nil {
+		s.logger.Printf("Warning: failed to run MPC optimization after market data cache update: %v", err)
+	}
 }
 
 // GetXMLCacheEntries returns a snapshot of all entries currently held in the

@@ -628,3 +628,67 @@ func TestDocumentDecode(t *testing.T) {
 		t.Errorf("Returned price: %f, want %f", price, 57.73)
 	}
 }
+
+func TestDocumentDecode_20260902(t *testing.T) {
+	file, err := os.Open("../test_data/Energy_Prices_202609012200-202609022200.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	doc, err := DecodeEnergyPricesXML(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(doc.TimeSeries) != 1 {
+		t.Fatalf("expected 1 time series, got %d", len(doc.TimeSeries))
+	}
+
+	period := doc.TimeSeries[0].Period
+	if len(period.Points) != 96 {
+		t.Fatalf("expected 96 points, got %d", len(period.Points))
+	}
+
+	// Verify position 1 (01:00-01:15) = 139.05
+	if period.Points[0].PriceAmount != 139.05 {
+		t.Errorf("pos 1 price = %f, want 139.05", period.Points[0].PriceAmount)
+	}
+
+	// Verify position 96 (00:45-01:00) = 26.08
+	if period.Points[95].PriceAmount != 26.08 {
+		t.Errorf("pos 96 price = %f, want 26.08", period.Points[95].PriceAmount)
+	}
+}
+
+func TestDocumentDecode_20260901(t *testing.T) {
+	file, err := os.Open("../test_data/Energy_Prices_202608312200-202609012200.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	doc, err := DecodeEnergyPricesXML(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(doc.TimeSeries) != 1 {
+		t.Fatalf("expected 1 time series, got %d", len(doc.TimeSeries))
+	}
+
+	period := doc.TimeSeries[0].Period
+	if len(period.Points) != 96 {
+		t.Fatalf("expected 96 points, got %d", len(period.Points))
+	}
+
+	// Verify position 1 (01:00-01:15) = 180.41
+	if period.Points[0].PriceAmount != 180.41 {
+		t.Errorf("pos 1 price = %f, want 180.41", period.Points[0].PriceAmount)
+	}
+
+	// Verify position 96 (00:45-01:00) = 73.23
+	if period.Points[95].PriceAmount != 73.23 {
+		t.Errorf("pos 96 price = %f, want 73.23", period.Points[95].PriceAmount)
+	}
+}

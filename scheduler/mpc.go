@@ -19,17 +19,24 @@ func (s *MinerScheduler) RunMPCOptimize(ctx context.Context) error {
 
 	config := s.GetConfig()
 
-	// Check if Plant Modbus Address is configured
-	if config.PlantModbusAddress == "" {
-		s.logger.Printf("MPC optimization skipped: PlantModbusAddress not configured")
-		return nil
-	}
-
-	// Step 1: Read plant running info from inverter
-	plantInfo, err := s.readPlantRunningInfo(ctx, config)
-	if err != nil {
-		s.logger.Printf("Error reading plant running info from inverter: %v", err)
-		return err
+	// Step 1: Read plant running info from inverter if configured, or use default plant info
+	var plantInfo *sigenergy.PlantRunningInfo
+	if config.PlantModbusAddress != "" {
+		var err error
+		plantInfo, err = s.readPlantRunningInfo(ctx, config)
+		if err != nil {
+			s.logger.Printf("Warning: Error reading plant running info from inverter: %v, using default plant info", err)
+			plantInfo = &sigenergy.PlantRunningInfo{
+				ESSSOC:                 50.0,
+				ESSAvgCellTemperature: 20.0,
+			}
+		}
+	} else {
+		s.logger.Printf("PlantModbusAddress not configured, using default plant info for MPC optimization")
+		plantInfo = &sigenergy.PlantRunningInfo{
+			ESSSOC:                 50.0,
+			ESSAvgCellTemperature: 20.0,
+		}
 	}
 
 	// Extract initial SOC from plant info

@@ -366,6 +366,15 @@ export function MarketDataUpload({ onClose }: MarketDataUploadProps) {
                             {label}
                           </span>
                         )}
+                        <a
+                          href={`/api/market-data/download?date=${encodeURIComponent(entry.date)}`}
+                          download={`Energy_Prices_${entry.date}.xml`}
+                          className="mdu-download-btn"
+                          title={`Download XML document for ${entry.date}`}
+                          aria-label={`Download XML document for ${entry.date}`}
+                        >
+                          📥
+                        </a>
                         <button
                           type="button"
                           className="mdu-delete-btn"

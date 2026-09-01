@@ -24,6 +24,9 @@ type CacheEntry struct {
 	// Document is the parsed market data.
 	Document *PublicationMarketData
 
+	// RawXML holds the original raw XML document bytes.
+	RawXML []byte
+
 	// UploadedAt is the time the document was stored in the cache.
 	UploadedAt time.Time
 
@@ -58,7 +61,7 @@ func (c *XMLDocumentCache) Store(date string, xmlData []byte) error {
 		return fmt.Errorf("failed to parse XML for date %s: %w", date, err)
 	}
 
-	c.StoreDocument(date, doc, CacheSourceUpload)
+	c.StoreDocumentWithRaw(date, doc, xmlData, CacheSourceUpload)
 	return nil
 }
 
@@ -66,15 +69,34 @@ func (c *XMLDocumentCache) Store(date string, xmlData []byte) error {
 // the given date key (expected format: YYYY-MM-DD).
 // Any existing entry for that date is overwritten.
 func (c *XMLDocumentCache) StoreDocument(date string, doc *PublicationMarketData, source CacheSource) {
+	c.StoreDocumentWithRaw(date, doc, nil, source)
+}
+
+// StoreDocumentWithRaw stores an already-parsed PublicationMarketData document alongside
+// its raw XML bytes under the given date key (expected format: YYYY-MM-DD).
+func (c *XMLDocumentCache) StoreDocumentWithRaw(date string, doc *PublicationMarketData, rawXML []byte, source CacheSource) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.entries[date] = &CacheEntry{
 		Document:   doc,
+		RawXML:     rawXML,
 		UploadedAt: time.Now(),
 		Date:       date,
 		Source:     source,
 	}
+}
+
+// GetRaw returns the raw XML bytes for the given date key, if available.
+func (c *XMLDocumentCache) GetRaw(date string) ([]byte, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	entry, ok := c.entries[date]
+	if !ok || len(entry.RawXML) == 0 {
+		return nil, false
+	}
+	return entry.RawXML, true
 }
 
 // Get returns the cached PublicationMarketData for the given date key.
