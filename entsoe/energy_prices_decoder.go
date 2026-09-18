@@ -401,16 +401,48 @@ func (p *Period) GetTimeRangeForPosition(position int) (start, end time.Time, va
 	return start, end, true
 }
 
-// DecodeEnergyPricesXML decodes the XML file and returns the parsed data
+// DecodeEnergyPricesXML decodes the XML file and returns the parsed data.
+//
+// The ENTSO-E Transparency Platform may answer a Publication_MarketDocument request
+// with an Acknowledgement_MarketDocument (even with HTTP 200), for example when the
+// day-ahead prices for the requested interval have not been published yet. In that
+// case an *AcknowledgementError is returned, which unwraps to ErrNoMatchingData for
+// reason code 999.
 func DecodeEnergyPricesXML(file io.Reader) (*PublicationMarketData, error) {
-
-	// Parse the XML
-	var doc PublicationMarketData
 	decoder := xml.NewDecoder(file)
-	err := decoder.Decode(&doc)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing XML: %v", err)
+
+	// Find the root element so we can dispatch on the document type.
+	var root *xml.StartElement
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			if err == io.EOF {
+				return nil, fmt.Errorf("error parsing XML: empty document, no root element found")
+			}
+			return nil, fmt.Errorf("error parsing XML: %v", err)
+		}
+		if start, ok := token.(xml.StartElement); ok {
+			root = &start
+			break
+		}
 	}
 
-	return &doc, nil
+	switch root.Name.Local {
+	case "Publication_MarketDocument":
+		var doc PublicationMarketData
+		if err := decoder.DecodeElement(&doc, root); err != nil {
+			return nil, fmt.Errorf("error parsing XML: %v", err)
+		}
+		return &doc, nil
+
+	case "Acknowledgement_MarketDocument":
+		var ack AcknowledgementMarketDocument
+		if err := decoder.DecodeElement(&ack, root); err != nil {
+			return nil, fmt.Errorf("error parsing Acknowledgement_MarketDocument: %v", err)
+		}
+		return nil, &AcknowledgementError{Document: &ack}
+
+	default:
+		return nil, fmt.Errorf("error parsing XML: expected element type <Publication_MarketDocument> but have <%s>", root.Name.Local)
+	}
 }

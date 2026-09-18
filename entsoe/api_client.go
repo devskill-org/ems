@@ -56,8 +56,6 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 	opts := &DownloadOptions{
 		UserAgent: client.userAgent,
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 
 	// Retrieve today's market data – use cache when available.
 	todayKey := now.Format("2006-01-02")
@@ -74,7 +72,7 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 		fmt.Println(url)
 		var err error
 		var rawXML []byte
-		marketDocument, rawXML, err = DownloadPublicationMarketDataWithRaw(ctx, url, opts)
+		marketDocument, rawXML, err = downloadWithTimeout(ctx, url, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -99,11 +97,18 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 		urlNextDay := buildPublicationMarketDataURL(securityToken, urlFormat, tomorrow)
 		var err error
 		var rawXMLNextDay []byte
-		marketDocumentNextDay, rawXMLNextDay, err = DownloadPublicationMarketDataWithRaw(ctx, urlNextDay, opts)
+		marketDocumentNextDay, rawXMLNextDay, err = downloadWithTimeout(ctx, urlNextDay, opts)
 		if err != nil {
-			return nil, err
-		}
-		if cache != nil {
+			if IsNoMatchingData(err) {
+				// Day-ahead prices for tomorrow are not published yet. This is expected
+				// before the market coupling results are released, so continue with
+				// today's data only instead of failing the whole forecast.
+				fmt.Printf("No market data published yet for %s: %v\n", tomorrowKey, err)
+				marketDocumentNextDay = nil
+			} else {
+				return nil, err
+			}
+		} else if cache != nil {
 			cache.StoreDocumentWithRaw(tomorrowKey, marketDocumentNextDay, rawXMLNextDay, CacheSourceDownload)
 		}
 	}
@@ -114,6 +119,19 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 	}
 
 	return marketDocument, nil
+}
+
+// requestTimeout bounds a single ENTSO-E API call. The Transparency Platform can be
+// slow, so the budget is applied per request instead of once for the whole
+// today + tomorrow sequence.
+const requestTimeout = 30 * time.Second
+
+// downloadWithTimeout performs a single download bounded by requestTimeout.
+func downloadWithTimeout(ctx context.Context, apiURL string, opts *DownloadOptions) (*PublicationMarketData, []byte, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	return DownloadPublicationMarketDataWithRaw(reqCtx, apiURL, opts)
 }
 
 // buildPublicationMarketDataURL extracts the URL assignment logic for DownloadPublicationMarketData.
