@@ -2,11 +2,14 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -179,10 +182,13 @@ func TestGetCurrentPrice_InvalidLocation(t *testing.T) {
 // TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices validates that uploading
 // market data XML invalidates cached prices, merges next day data, and re-runs MPC.
 func TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices(t *testing.T) {
-	xmlData, err := os.ReadFile("../test_data/Energy_Prices_202609012200-202609022200.xml")
-	if err != nil {
-		t.Fatalf("Failed to read test data file: %v", err)
-	}
+	// The document must cover the current wall clock: buildMPCForecast walks
+	// forward from time.Now() and silently drops every slot that has no price,
+	// so a fixture pinned to a hard-coded date yields an empty forecast (and
+	// zero MPC decisions) on any other day. Generate the prices relative to
+	// today instead of reading a static file.
+	dayStart := time.Now().UTC().Truncate(24 * time.Hour)
+	xmlData := dayAheadPricesXML(dayStart, 48*time.Hour)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
@@ -205,9 +211,12 @@ func TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices(t *testing.T) {
 	scheduler := NewMinerScheduler(config, logger)
 
 	ctx := context.Background()
-	dateKey := "2026-09-02"
 
-	err = scheduler.StoreMarketDataXML(dateKey, xmlData)
+	// The XML cache is keyed on the current date in the configured location
+	// (see entsoe.DownloadPublicationMarketData), so the key must track today.
+	dateKey := dayStart.Format("2006-01-02")
+
+	err := scheduler.StoreMarketDataXML(dateKey, xmlData)
 	if err != nil {
 		t.Fatalf("StoreMarketDataXML failed: %v", err)
 	}
@@ -223,10 +232,78 @@ func TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices(t *testing.T) {
 		t.Fatal("Expected non-nil marketData")
 	}
 
+	// Sanity-check that the generated document really does price the current
+	// moment; otherwise a zero-decision result below would be ambiguous.
+	if _, ok := marketData.LookupPriceByTime(time.Now()); !ok {
+		t.Fatal("generated market data does not cover the current time")
+	}
+
 	decisions := scheduler.GetMPCDecisions()
 	if len(decisions) == 0 {
 		t.Errorf("Expected MPC decisions to be generated after uploading XML, got 0")
 	}
+}
+
+// dayAheadPricesXML builds a minimal but valid ENTSO-E A44 day-ahead price
+// document covering [start, start+duration) at 15-minute resolution.
+//
+// Prices follow a simple repeating daily shape so the MPC has something with
+// enough spread to act on; the exact values are irrelevant to the assertions.
+func dayAheadPricesXML(start time.Time, duration time.Duration) []byte {
+	const resolution = 15 * time.Minute
+	start = start.UTC()
+	end := start.Add(duration)
+	points := int(duration / resolution)
+
+	var b strings.Builder
+	const tsFormat = "2006-01-02T15:04Z"
+
+	fmt.Fprintf(&b, `<?xml version="1.0" encoding="UTF-8"?>
+<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
+    <mRID>test-%s</mRID>
+    <revisionNumber>1</revisionNumber>
+    <type>A44</type>
+    <createdDateTime>%s</createdDateTime>
+    <period.timeInterval>
+      <start>%s</start>
+      <end>%s</end>
+    </period.timeInterval>
+      <TimeSeries>
+        <mRID>1</mRID>
+        <businessType>A62</businessType>
+        <in_Domain.mRID codingScheme="A01">10YLV-1001A00074</in_Domain.mRID>
+        <out_Domain.mRID codingScheme="A01">10YLV-1001A00074</out_Domain.mRID>
+        <currency_Unit.name>EUR</currency_Unit.name>
+        <price_Measure_Unit.name>MWH</price_Measure_Unit.name>
+        <curveType>A03</curveType>
+          <Period>
+            <timeInterval>
+              <start>%s</start>
+              <end>%s</end>
+            </timeInterval>
+            <resolution>PT15M</resolution>
+`, start.Format("20060102"), start.Format(time.RFC3339),
+		start.Format(tsFormat), end.Format(tsFormat),
+		start.Format(tsFormat), end.Format(tsFormat))
+
+	for i := range points {
+		// Cheap overnight, expensive in the evening peak — a spread the
+		// optimizer can actually exploit.
+		hour := float64((i*int(resolution/time.Minute)/60)%24) + 0.0
+		price := 100.0 + 80.0*math.Sin((hour-6)/24*2*math.Pi)
+		fmt.Fprintf(&b, `              <Point>
+                <position>%d</position>
+                <price.amount>%.2f</price.amount>
+              </Point>
+`, i+1, price)
+	}
+
+	b.WriteString(`          </Period>
+      </TimeSeries>
+</Publication_MarketDocument>
+`)
+
+	return []byte(b.String())
 }
 
 // TestMarketDataDownloadHandler validates the GET /api/market-data/download endpoint
