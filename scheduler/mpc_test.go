@@ -657,7 +657,7 @@ func TestGetSolarForecast_NilWeatherForecast_NilOpenMeteo(t *testing.T) {
 
 	// Point the scheduler at a fake Open-Meteo server that always returns 503 so
 	// the fetch fails deterministically regardless of internet connectivity.
-	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 	}))
 	defer fakeServer.Close()

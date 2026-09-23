@@ -752,7 +752,8 @@ func (hs *WebServer) marketDataUploadHandler(w http.ResponseWriter, r *http.Requ
 	// Limit request body to 10 MB to prevent memory exhaustion.
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 
-	// Parse multipart form – limit body to 10 MB.
+	// Parse multipart form – the body size is already capped by MaxBytesReader above.
+	//nolint:gosec // G120: request body is bounded by http.MaxBytesReader (10 MB)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to parse form: " + err.Error()})
@@ -863,6 +864,16 @@ func (hs *WebServer) marketDataDownloadHandler(w http.ResponseWriter, r *http.Re
 		date = time.Now().In(location).Format("2006-01-02")
 	}
 
+	// Validate the date so it is safe to embed in response headers.
+	parsedDate, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid date format, expected YYYY-MM-DD"})
+		return
+	}
+	date = parsedDate.Format("2006-01-02")
+
 	rawXML, ok := hs.scheduler.xmlCache.GetRaw(date)
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
@@ -872,8 +883,10 @@ func (hs *WebServer) marketDataDownloadHandler(w http.ResponseWriter, r *http.Re
 	}
 
 	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"Energy_Prices_%s.xml\"", date))
 	w.WriteHeader(http.StatusOK)
+	//nolint:gosec // G705: served as a non-sniffable XML attachment, never rendered inline
 	_, _ = w.Write(rawXML)
 }
 
