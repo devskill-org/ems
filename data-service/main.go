@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -16,16 +17,25 @@ import (
 	"github.com/devskill-org/ems/mpc"
 )
 
+// defaultPort is the port used when PORT is not set in the environment.
+const defaultPort = 8081
+
 var (
 	decisions   []mpc.ControlDecision
 	decisionsMu sync.RWMutex
 )
 
 func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8081"
+	// Validate the port from the environment to avoid propagating untrusted input.
+	portNum := defaultPort
+	if raw := os.Getenv("PORT"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 65535 {
+			log.Fatalf("invalid PORT value")
+		}
+		portNum = parsed
 	}
+	port := strconv.Itoa(portNum)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mpc/save", handleMPCSave)
@@ -38,7 +48,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("data-service HTTP server listening on :%s", port)
+		log.Printf("data-service HTTP server listening on :%d", portNum)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}

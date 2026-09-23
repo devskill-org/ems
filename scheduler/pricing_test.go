@@ -12,6 +12,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/devskill-org/ems/meteo"
+	"github.com/devskill-org/ems/mpc"
+	"github.com/devskill-org/ems/openmeteo"
 )
 
 // TestGetCurrentPrice_UsesConfiguredTimezone validates that getCurrentPrice uses the configured timezone
@@ -210,6 +214,13 @@ func TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices(t *testing.T) {
 	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
 	scheduler := NewMinerScheduler(config, logger)
 
+	// Pre-seed the weather and solar irradiance caches so buildMPCForecast never
+	// reaches out to MET Norway or Open-Meteo. Without this the asynchronous MPC
+	// run started by StoreMarketDataXML blocks on real network I/O, which makes
+	// the test both non-hermetic and dependent on how fast those APIs respond.
+	scheduler.weatherCache.Set(&meteo.METJSONForecast{})
+	scheduler.solarForecastCache.Set(&openmeteo.SolarForecast{})
+
 	ctx := context.Background()
 
 	// The XML cache is keyed on the current date in the configured location
@@ -220,8 +231,6 @@ func TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StoreMarketDataXML failed: %v", err)
 	}
-
-	time.Sleep(500 * time.Millisecond)
 
 	marketData, err := scheduler.GetMarketData(ctx)
 	if err != nil {
@@ -238,9 +247,29 @@ func TestStoreMarketDataXML_RefreshesMPCAndNextDayPrices(t *testing.T) {
 		t.Fatal("generated market data does not cover the current time")
 	}
 
-	decisions := scheduler.GetMPCDecisions()
+	// StoreMarketDataXML refreshes the MPC asynchronously, so poll for the
+	// result instead of sleeping for a fixed duration.
+	decisions := waitForMPCDecisions(t, scheduler, 10*time.Second)
 	if len(decisions) == 0 {
 		t.Errorf("Expected MPC decisions to be generated after uploading XML, got 0")
+	}
+}
+
+// waitForMPCDecisions polls the scheduler until it reports at least one MPC
+// decision or the timeout elapses, returning whatever it saw last.
+func waitForMPCDecisions(t *testing.T, s *MinerScheduler, timeout time.Duration) []mpc.ControlDecision {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		decisions := s.GetMPCDecisions()
+		if len(decisions) > 0 {
+			return decisions
+		}
+		if time.Now().After(deadline) {
+			return decisions
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

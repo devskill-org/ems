@@ -123,14 +123,29 @@ func NewController(config SystemConfig, horizon int, initialSOC float64) *Contro
 	return c
 }
 
-// Optimize finds the optimal control strategy using dynamic programming.
-// It runs two optimizations: one with solar forecast and one without (grid-only),
-// then splits BatteryCharge into BatteryChargeFromPV and BatteryChargeFromGrid.
+// Optimize finds the optimal control strategy using dynamic programming, then splits
+// the resulting charge into BatteryChargeFromPV and BatteryChargeFromGrid.
 //
-// Grid charging is suppressed entirely when the forecasted solar surplus over the
-// horizon is sufficient to charge the battery from its current SOC to full.  This
-// prevents unnecessary grid imports during temporary cloud cover when overall daily
-// solar production is more than enough to meet the full charge requirement.
+// The split is derived from the single solar-aware DP pass: whatever the PV surplus
+// can cover is attributed to PV, and the remainder is grid charge.  Deriving it this
+// way is what keeps overnight grid charging honest — the optimizer sizes the night's
+// imports knowing how much free PV is arriving in the morning, so it buys only what
+// still leaves headroom for that PV rather than filling the battery at 03:00 and
+// forcing the next day's generation to be exported at midday's low prices.
+//
+// Grid charging is additionally suppressed *within the daylight window* when the
+// forecasted solar surplus is sufficient to charge the battery from its current SOC
+// to full.  This prevents unnecessary grid imports during temporary cloud cover when
+// overall daily solar production is more than enough to meet the full charge
+// requirement.
+//
+// That suppression deliberately does NOT extend to slots outside the daylight window.
+// Before sunrise and after sunset there is no PV to wait for, so "today's sun will
+// cover it" is not an argument against buying cheap energy: overnight
+// charge-low/discharge-high arbitrage is profitable independently of how sunny the
+// following day turns out to be.  Applying the gate across the whole horizon left the
+// battery idle through the cheapest hours of the night purely because the next
+// afternoon looked bright.
 func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	if len(forecast) == 0 {
 		return nil
@@ -140,13 +155,8 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	// incentivised during this optimisation run – at most once per calendar week.
 	needsBalancing := mpc.needsWeeklyBalancing(forecast)
 
-	// Run optimization with full solar forecast.
+	// Run optimization with the full solar forecast.
 	decisionsWithSolar := mpc.optimizeWithForecast(forecast, true, needsBalancing)
-
-	// Run optimization without solar (grid-only scenario).
-	// Used to identify grid charging that is profitable regardless of solar, so
-	// that the battery still charges from the grid on genuinely overcast days.
-	decisionsWithoutSolar := mpc.optimizeWithForecast(forecast, false, needsBalancing)
 
 	n := min(len(decisionsWithSolar), len(forecast))
 
@@ -165,24 +175,52 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	// Energy (kWh at the AC input) needed to charge from CurrentSOC to
 	// BatteryMaxSOC, accounting for charging efficiency.
 	energyNeededToFull := math.Max(0,
-		(mpc.Config.BatteryMaxSOC-mpc.CurrentSOC)*mpc.Config.BatteryCapacity/mpc.Config.BatteryEfficiency)
+		(mpc.Config.BatteryMaxSOC-mpc.CurrentSOC)*mpc.Config.BatteryCapacity/mpc.batteryEfficiency())
 
 	// Only count solar surplus up to the nearest sunset. Summing across a
 	// multi-day horizon would let solar production from a future day mask an
 	// inability to charge fully today, causing grid charging to be suppressed
-	// even though today's solar alone can't cover it. Sunset is identified as
-	// the first slot where forecasted solar returns to zero after having been
-	// positive (i.e. the sun has set); if that never happens within the
-	// horizon (e.g. no daylight forecast at all), the full horizon is used.
+	// even though today's solar alone can't cover it.
+	//
+	// Sunset cannot simply be "the first zero-solar slot after the sun came up":
+	// a passing cloud also drives the forecast to zero, and treating it as
+	// sunset would cut the day short — collapsing the surplus total and
+	// defeating the very transient-cloud case this heuristic exists to handle.
+	// Instead a sunset is a zero-solar run long enough to be actual night
+	// (nightGapSlots ≈ 3 hours); shorter gaps are cloud cover and are absorbed
+	// into the day.  If no such run occurs within the horizon (e.g. the horizon
+	// ends mid-afternoon, or there is no daylight forecast at all) the full
+	// horizon is used.
+	//
+	// sunriseIdx is the first slot with any forecasted solar. Together the two
+	// indices delimit the daylight window [sunriseIdx, sunsetIdx) in which the
+	// solar-sufficiency argument actually applies.
+	nightGapSlots := int(math.Ceil(3.0 / timeSlotDuration))
+	if nightGapSlots < 1 {
+		nightGapSlots = 1
+	}
+
+	sunriseIdx := n
 	sunsetIdx := n
 	sawSun := false
+	zeroRunStart := -1
 	for i, slot := range forecast[:n] {
 		if slot.SolarForecast > 0 {
+			if !sawSun {
+				sunriseIdx = i
+			}
 			sawSun = true
+			zeroRunStart = -1
 			continue
 		}
-		if sawSun {
-			sunsetIdx = i
+		if !sawSun {
+			continue
+		}
+		if zeroRunStart < 0 {
+			zeroRunStart = i
+		}
+		if i-zeroRunStart+1 >= nightGapSlots {
+			sunsetIdx = zeroRunStart
 			break
 		}
 	}
@@ -198,19 +236,17 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 	// avoid pulling from the grid during transient cloud cover.
 	solarSufficient := totalSolarSurplus >= energyNeededToFull
 
-	// ── Combine results ──────────────────────────────────────────────────────
-	// The solar-scenario decision accounts for the full charge rate (PV surplus
-	// first, topped up by grid when profitable).  We derive the PV portion as
-	// whatever charge the solar surplus can cover, and the grid portion from
-	// the without-solar scenario (unless solar is sufficient for the day).
+	// ── Split the optimized charge into PV and grid portions ────────────────
+	// The DP decision accounts for the full charge rate; we attribute whatever
+	// the PV surplus can cover to PV and the remainder to the grid.
 	//
 	// Splitting can *reduce* the charge that will actually happen versus what
-	// the with-solar DP scenario assumed (e.g. grid top-up gets suppressed
-	// entirely when solarSufficient is true). Everything that scenario derived
-	// from its charge amount — GridImport/GridExport, battery preheating, the
-	// SOC trajectory, and Profit — is therefore recomputed below from the
-	// actual (possibly lower) charge so the returned decisions stay internally
-	// consistent with what will really be executed.
+	// the DP assumed (grid top-up gets suppressed when solarSufficient is true
+	// inside the daylight window). Everything the DP derived from its charge
+	// amount — GridImport/GridExport, battery preheating, the SOC trajectory,
+	// and Profit — is therefore recomputed below from the actual (possibly
+	// lower) charge so the returned decisions stay internally consistent with
+	// what will really be executed.
 	finalDecisions := make([]ControlDecision, n)
 	runningSOC := mpc.CurrentSOC
 	for i, slot := range forecast[:n] {
@@ -225,19 +261,47 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 		// (capped at the total charge being applied).
 		pvPortion := math.Min(pvSurplus, totalCharge)
 
-		// Grid portion: use the without-solar scenario's recommendation, but
-		// suppress it entirely when daily solar production is sufficient to
-		// charge the battery in full.  When allowed, cap so that
-		// pvPortion + gridPortion never exceeds the hardware-rated maximum
-		// charge power (exceeding it would cause the inverter to reject the
-		// register write with an illegal-data error).
+		// Grid portion: the part of the DP's charge that PV cannot cover,
+		// suppressed when daily solar production is sufficient to charge the
+		// battery in full *and* this slot lies inside the daylight window.
+		// Outside that window (before sunrise / after sunset) there is no PV
+		// on the way, so cheap-hour grid charging stays available and normal
+		// overnight arbitrage is preserved.
+		//
+		// Because totalCharge comes from the solar-aware DP, the grid portion
+		// is already sized in the knowledge of the coming day's generation: it
+		// buys only what still leaves room for that PV.
+		inDaylightWindow := i >= sunriseIdx && i < sunsetIdx
 		gridPortion := 0.0
-		if !solarSufficient {
-			gridPortion = math.Min(decisionsWithoutSolar[i].batteryCharge, mpc.Config.BatteryMaxCharge-pvPortion)
-			gridPortion = math.Max(0, gridPortion)
+		if !solarSufficient || !inDaylightWindow {
+			gridPortion = math.Max(0, totalCharge-pvPortion)
 		}
 
 		actualCharge := pvPortion + gridPortion
+
+		// Clamp charge and discharge to what the battery can actually accept or
+		// deliver from runningSOC.  The DP's SOC trajectory differs from the
+		// reconciled one computed here whenever the grid top-up was suppressed
+		// above.  Without this clamp calculateNewSOC silently saturates at the
+		// SOC limits while the grid import/export below is still sized for the
+		// unclamped power — producing plans that import into a full battery or
+		// export energy the battery does not hold (observed in production as a
+		// 20 kW discharge scheduled from a battery at 0.2% SOC).
+		discharge := finalDecisions[i].BatteryDischarge
+
+		if maxCharge := mpc.maxChargePower(runningSOC, timeSlotDuration); actualCharge > maxCharge {
+			// Give up the grid top-up first: PV surplus is free and would
+			// otherwise have to be curtailed or exported, whereas grid charge
+			// is purely optional and costs money.
+			pvPortion = math.Min(pvPortion, maxCharge)
+			gridPortion = math.Max(0, maxCharge-pvPortion)
+			actualCharge = pvPortion + gridPortion
+		}
+
+		if maxDischarge := mpc.maxDischargePower(runningSOC, timeSlotDuration); discharge > maxDischarge {
+			discharge = math.Max(0, maxDischarge)
+			finalDecisions[i].BatteryDischarge = discharge
+		}
 
 		finalDecisions[i].BatteryChargeFromPV = pvPortion
 		finalDecisions[i].BatteryChargeFromGrid = gridPortion
@@ -261,10 +325,10 @@ func (mpc *Controller) Optimize(forecast []TimeSlot) []ControlDecision {
 		// included a grid top-up; when that top-up is suppressed above, the
 		// import/export figures must be recalculated — otherwise the
 		// decision would report a grid import that funds a charge which no
-		// longer happens.
-		discharge := finalDecisions[i].BatteryDischarge
-		netSupply := slot.SolarForecast + discharge*mpc.Config.BatteryEfficiency
-		netLoad := slot.LoadForecast + actualCharge/mpc.Config.BatteryEfficiency + extraLoad
+		// longer happens.  `discharge` is the clamped value from above.
+		netSupply := slot.SolarForecast + discharge*mpc.batteryEfficiency()
+		netLoad := slot.LoadForecast + actualCharge/mpc.batteryEfficiency() + extraLoad
+
 		balance := netSupply - netLoad
 
 		if balance > 0 {
@@ -577,8 +641,8 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 			extraLoad = preHeatPower
 		}
 
-		netLoad := slot.LoadForecast + action.charge/mpc.Config.BatteryEfficiency + extraLoad
-		netSupply := netSolar + action.discharge*mpc.Config.BatteryEfficiency
+		netLoad := slot.LoadForecast + action.charge/mpc.batteryEfficiency() + extraLoad
+		netSupply := netSolar + action.discharge*mpc.batteryEfficiency()
 
 		balance := netSupply - netLoad
 
@@ -605,12 +669,12 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 				// in netLoad), so `balance` is the PV power that still has nowhere
 				// to go. Try to increase charging to absorb it — but only up to the
 				// hardware maximum and SOC limits.
-				extraCharge := math.Min(balance*mpc.Config.BatteryEfficiency, mpc.Config.BatteryMaxCharge-action.charge)
+				extraCharge := math.Min(balance*mpc.batteryEfficiency(), mpc.Config.BatteryMaxCharge-action.charge)
 				if extraCharge > 0 && mpc.canCharge(currentSOC, action.charge+extraCharge) {
 					// Absorb as much surplus as possible into the battery.
 					dec.batteryCharge += extraCharge
 					// Recalculate balance after the extra charging.
-					balance -= extraCharge / mpc.Config.BatteryEfficiency
+					balance -= extraCharge / mpc.batteryEfficiency()
 				}
 
 				if balance > 0.001 {
@@ -704,6 +768,13 @@ func (mpc *Controller) canCharge(soc, charge float64) bool {
 	// multiply by time slot duration AND efficiency so that both functions agree on
 	// how much the SOC actually rises.
 	chargeEnergy := charge * timeSlotDuration * efficiency
+
+	// With no usable capacity nothing can be stored; charging is never feasible.
+	// Guarding here keeps the ±Inf/NaN out of the comparison below.
+	if mpc.Config.BatteryCapacity <= 0 {
+		return false
+	}
+
 	newSOC := soc + (chargeEnergy / mpc.Config.BatteryCapacity)
 	return newSOC <= mpc.Config.BatteryMaxSOC
 }
@@ -715,10 +786,68 @@ func (mpc *Controller) canDischarge(soc, discharge float64) bool {
 		timeSlotDuration = 1.0
 	}
 
+	// With no usable capacity there is nothing stored to discharge.
+	if mpc.Config.BatteryCapacity <= 0 {
+		return false
+	}
+
 	// Convert power (kW) to energy (kWh) by multiplying by time slot duration
 	dischargeEnergy := discharge * timeSlotDuration
 	newSOC := soc - (dischargeEnergy / mpc.Config.BatteryCapacity)
 	return newSOC >= mpc.Config.BatteryMinSOC
+}
+
+// batteryEfficiency returns the configured round-trip efficiency, defaulting to 1.0
+// (lossless) when it is unset or non-positive.
+//
+// Several power-balance expressions divide by this value. With an unpopulated config
+// it is zero, and `0 / 0` is NaN — which silently propagated into GridImport, Profit
+// and ultimately the SOC index, where it surfaced as an out-of-range panic. Defaulting
+// mirrors how TimeSlotDuration is already handled throughout this file and keeps every
+// returned figure finite.
+func (mpc *Controller) batteryEfficiency() float64 {
+	if mpc.Config.BatteryEfficiency <= 0 {
+		return 1.0
+	}
+	return mpc.Config.BatteryEfficiency
+}
+
+// maxChargePower returns the largest charge power (kW) that can be applied for one
+// time slot from soc without exceeding BatteryMaxSOC.  It is the exact inverse of the
+// SOC update in calculateNewSOC, including the CV/balancing derate, so that clamping
+// to this value never saturates.  The result is also capped at the hardware limit.
+func (mpc *Controller) maxChargePower(soc, timeSlotDuration float64) float64 {
+	efficiency := 1.0
+	if mpc.Config.BatteryBalancingSOCThreshold > 0 &&
+		mpc.Config.BatteryBalancingEfficiencyFactor > 0 &&
+		soc >= mpc.Config.BatteryBalancingSOCThreshold {
+		efficiency = mpc.Config.BatteryBalancingEfficiencyFactor
+	}
+
+	headroom := mpc.Config.BatteryMaxSOC - soc
+	if headroom <= 0 {
+		return 0
+	}
+
+	return math.Min(
+		headroom*mpc.Config.BatteryCapacity/(efficiency*timeSlotDuration),
+		mpc.Config.BatteryMaxCharge,
+	)
+}
+
+// maxDischargePower returns the largest discharge power (kW) that can be sustained for
+// one time slot from soc without dropping below BatteryMinSOC, capped at the hardware
+// limit.  Mirrors the SOC update in calculateNewSOC.
+func (mpc *Controller) maxDischargePower(soc, timeSlotDuration float64) float64 {
+	available := soc - mpc.Config.BatteryMinSOC
+	if available <= 0 {
+		return 0
+	}
+
+	return math.Min(
+		available*mpc.Config.BatteryCapacity/timeSlotDuration,
+		mpc.Config.BatteryMaxDischarge,
+	)
 }
 
 func (mpc *Controller) calculateNewSOC(currentSOC, charge, discharge float64) float64 {
@@ -754,13 +883,50 @@ func (mpc *Controller) calculateNewSOC(currentSOC, charge, discharge float64) fl
 	// Convert power (kW) to energy (kWh) by multiplying by time slot duration
 	chargeEnergy := charge * timeSlotDuration * efficiency
 	dischargeEnergy := discharge * timeSlotDuration
+
+	// A non-positive capacity means no energy can move in or out of the cells.
+	// Dividing by it would yield NaN (0/0) or ±Inf and poison the SOC for the
+	// rest of the horizon — and ultimately the DP index derived from it.
+	if mpc.Config.BatteryCapacity <= 0 {
+		return math.Max(mpc.Config.BatteryMinSOC, math.Min(mpc.Config.BatteryMaxSOC, currentSOC))
+	}
+
 	socChange := (chargeEnergy - dischargeEnergy) / mpc.Config.BatteryCapacity
 	newSOC := currentSOC + socChange
 	return math.Max(mpc.Config.BatteryMinSOC, math.Min(mpc.Config.BatteryMaxSOC, newSOC))
 }
 
+// socToIndex maps an SOC value onto its DP table row.
+//
+// It must never return a value that cannot be used to index the table. Two
+// degenerate configurations previously produced one:
+//
+//   - BatteryMaxSOC == BatteryMinSOC makes socStep zero, so the division
+//     yields NaN (0/0) or ±Inf. Converting NaN to int is implementation
+//     defined and on amd64/arm64 gives the minimum int64, which panicked as
+//     soon as it was used as an index.
+//   - A non-finite soc (e.g. NaN propagated from a zero BatteryCapacity)
+//     produces the same result.
+//
+// A zero-width SOC range has exactly one reachable level, so index 0 is the
+// correct answer there. A NaN SOC is not a real state and is reported as -1,
+// which callers already treat as out of range and skip.
 func (mpc *Controller) socToIndex(soc float64, socStep float64) int {
-	return int(math.Floor((soc - mpc.Config.BatteryMinSOC) / socStep))
+	if !(socStep > 0) {
+		return 0
+	}
+
+	idx := math.Floor((soc - mpc.Config.BatteryMinSOC) / socStep)
+	switch {
+	case math.IsNaN(idx):
+		return -1
+	case math.IsInf(idx, -1):
+		return -1
+	case math.IsInf(idx, 1):
+		return math.MaxInt
+	}
+
+	return int(idx)
 }
 
 func (mpc *Controller) indexToSOC(index int, socStep float64) float64 {
