@@ -1559,9 +1559,10 @@ func TestNegativeExportPriceTransition(t *testing.T) {
 }
 
 // TestOptimize_SolarSufficientSuppressesGridCharging verifies that BatteryChargeFromGrid
-// is zero for every slot when the total forecasted solar surplus over the horizon is
+// is zero throughout the daylight window when the total forecasted solar surplus is
 // enough to charge the battery from its current SOC to BatteryMaxSOC.  Temporary cloud
-// cover (a slot with SolarForecast = 0 inside a sunny day) must NOT trigger grid imports.
+// cover (a slot with SolarForecast = 0 *inside* a sunny day) must NOT trigger grid
+// imports, even when that slot happens to be the cheapest of the day.
 func TestOptimize_SolarSufficientSuppressesGridCharging(t *testing.T) {
 	config := SystemConfig{
 		BatteryCapacity:        10.0, // kWh
@@ -1579,16 +1580,19 @@ func TestOptimize_SolarSufficientSuppressesGridCharging(t *testing.T) {
 	// Battery starts at 10% SOC and needs to reach 90%.
 	// energyNeededToFull = (0.9 - 0.1) * 10 / 0.9 ≈ 8.89 kWh
 	//
-	// Solar surplus per slot (solar - load, floored at 0) × 1 h:
-	//   slot 0: cloud  → max(0, 0 - 0.5) * 1 = 0 kWh
-	//   slot 1: sunny  → max(0, 5 - 0.5) * 1 = 4.5 kWh
+	// The horizon opens at sunrise, so the daylight window is [0, 4):
+	//   slot 0: sunny  → max(0, 5 - 0.5) * 1 = 4.5 kWh
+	//   slot 1: CLOUD  → max(0, 0 - 0.5) * 1 = 0   kWh   (cheapest slot of the day)
 	//   slot 2: sunny  → max(0, 5 - 0.5) * 1 = 4.5 kWh
 	//   slot 3: sunny  → max(0, 5 - 0.5) * 1 = 4.5 kWh
-	//   slot 4: cloud  → max(0, 0 - 0.5) * 1 = 0 kWh
+	//   slot 4: after sunset — outside the window, governed by arbitrage
 	// Total solar surplus = 13.5 kWh  ≥  8.89 kWh → solarSufficient = true
+	//
+	// Slot 1 is deliberately the cheapest import price in the horizon: without
+	// the gate the optimizer would grid-charge straight through the cloud.
 	forecast := []TimeSlot{
-		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.0, LoadForecast: 0.5},
-		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.0, LoadForecast: 0.5},
 		{Hour: 2, Timestamp: 1704333600, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
 		{Hour: 3, Timestamp: 1704337200, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
 		{Hour: 4, Timestamp: 1704340800, ImportPrice: 0.30, ExportPrice: 0.15, SolarForecast: 0.0, LoadForecast: 0.5},
@@ -1601,9 +1605,11 @@ func TestOptimize_SolarSufficientSuppressesGridCharging(t *testing.T) {
 		t.Fatalf("expected %d decisions, got %d", len(forecast), len(decisions))
 	}
 
+	// Daylight window is [0, 4) — sunset is slot 4.
+	const daylightEnd = 4
 	for i, d := range decisions {
-		if d.BatteryChargeFromGrid > 1e-9 {
-			t.Errorf("slot %d: BatteryChargeFromGrid = %.4f kW, want 0 (solar sufficient)",
+		if i < daylightEnd && d.BatteryChargeFromGrid > 1e-9 {
+			t.Errorf("slot %d: BatteryChargeFromGrid = %.4f kW, want 0 (inside daylight window, solar sufficient)",
 				i, d.BatteryChargeFromGrid)
 		}
 		t.Logf("slot %d: ChargeFromPV=%.3f kW, ChargeFromGrid=%.3f kW, SOC=%.3f, Solar=%.1f kW",
@@ -1632,8 +1638,8 @@ func TestOptimize_DecisionsAreInternallyConsistentAfterSuppression(t *testing.T)
 	}
 
 	forecast := []TimeSlot{
-		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.0, LoadForecast: 0.5},
-		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
+		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.05, ExportPrice: 0.02, SolarForecast: 0.0, LoadForecast: 0.5},
 		{Hour: 2, Timestamp: 1704333600, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
 		{Hour: 3, Timestamp: 1704337200, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 5.0, LoadForecast: 0.5},
 		{Hour: 4, Timestamp: 1704340800, ImportPrice: 0.30, ExportPrice: 0.15, SolarForecast: 0.0, LoadForecast: 0.5},
@@ -1673,18 +1679,18 @@ func TestOptimize_DecisionsAreInternallyConsistentAfterSuppression(t *testing.T)
 		}
 	}
 
-	// Slot 0 specifically mirrors the reported bug: no PV surplus (solar < load)
-	// and grid charging suppressed for the whole horizon (solar sufficient overall).
+	// Slot 1 specifically mirrors the reported bug: a cloud inside the sunny day
+	// with no PV surplus (solar < load) and grid charging suppressed by the gate.
 	// The actual charge must be 0, and GridImport must reflect only the load
 	// deficit — not a stale value sized for a charge that never happens.
-	if decisions[0].BatteryChargeFromPV != 0 || decisions[0].BatteryChargeFromGrid != 0 {
-		t.Fatalf("expected no charge in slot 0, got PV=%.4f kW Grid=%.4f kW",
-			decisions[0].BatteryChargeFromPV, decisions[0].BatteryChargeFromGrid)
+	if decisions[1].BatteryChargeFromPV != 0 || decisions[1].BatteryChargeFromGrid != 0 {
+		t.Fatalf("expected no charge in slot 1, got PV=%.4f kW Grid=%.4f kW",
+			decisions[1].BatteryChargeFromPV, decisions[1].BatteryChargeFromGrid)
 	}
-	wantImport := forecast[0].LoadForecast - forecast[0].SolarForecast
-	if math.Abs(decisions[0].GridImport-wantImport) > 1e-9 {
-		t.Errorf("slot 0: GridImport = %.4f kW, want %.4f kW (load only, no stale charge-driven import)",
-			decisions[0].GridImport, wantImport)
+	wantImport := forecast[1].LoadForecast - forecast[1].SolarForecast
+	if decisions[1].BatteryDischarge == 0 && math.Abs(decisions[1].GridImport-wantImport) > 1e-9 {
+		t.Errorf("slot 1: GridImport = %.4f kW, want %.4f kW (load only, no stale charge-driven import)",
+			decisions[1].GridImport, wantImport)
 	}
 }
 
@@ -1740,5 +1746,252 @@ func TestOptimize_SolarInsufficientAllowsGridCharging(t *testing.T) {
 	for i, d := range decisions {
 		t.Logf("slot %d: ChargeFromPV=%.3f kW, ChargeFromGrid=%.3f kW, SOC=%.3f, ImportPrice=%.3f",
 			i, d.BatteryChargeFromPV, d.BatteryChargeFromGrid, d.BatterySOC, d.ImportPrice)
+	}
+}
+
+// TestOptimize_OvernightArbitrageNotSuppressedBySunnyTomorrow is a regression test for
+// the reported fault: the battery sat idle and empty all night, through the cheapest
+// prices of the horizon, because the *next day's* forecast solar was enough to fill it.
+//
+// The solar-sufficiency heuristic used to be applied across the whole horizon, so a
+// bright afternoon 10+ hours away suppressed grid charging during the pre-dawn price
+// trough. Sunrise is hours off at that point, so PV is no argument against buying
+// cheap: charge-low/discharge-high arbitrage stands on its own.
+func TestOptimize_OvernightArbitrageNotSuppressedBySunnyTomorrow(t *testing.T) {
+	config := SystemConfig{
+		BatteryCapacity:        10.0, // kWh
+		BatteryMaxCharge:       5.0,  // kW
+		BatteryMaxDischarge:    5.0,  // kW
+		BatteryMinSOC:          0.1,
+		BatteryMaxSOC:          0.9,
+		BatteryEfficiency:      0.9,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          10.0,
+		MaxGridExport:          10.0,
+		TimeSlotDuration:       1.0,
+	}
+
+	// Slots 0-5: night, no solar, cheap (0.05). Slots 6-11: sunny day, ample
+	// surplus (6 x 4.5 = 27 kWh, far above the ~8.9 kWh needed to fill the
+	// battery) so solarSufficient is true. Slots 12-14: evening peak, expensive
+	// import and a high export price to sell into.
+	forecast := []TimeSlot{}
+	ts := int64(1704326400)
+	for i := range 6 { // night
+		forecast = append(forecast, TimeSlot{
+			Hour: i, Timestamp: ts + int64(i)*3600,
+			ImportPrice: 0.05, ExportPrice: 0.02,
+			SolarForecast: 0.0, LoadForecast: 0.5,
+		})
+	}
+	for i := 6; i < 12; i++ { // sunny day
+		forecast = append(forecast, TimeSlot{
+			Hour: i, Timestamp: ts + int64(i)*3600,
+			ImportPrice: 0.10, ExportPrice: 0.05,
+			SolarForecast: 5.0, LoadForecast: 0.5,
+		})
+	}
+	for i := 12; i < 15; i++ { // evening peak
+		forecast = append(forecast, TimeSlot{
+			Hour: i, Timestamp: ts + int64(i)*3600,
+			ImportPrice: 0.30, ExportPrice: 0.25,
+			SolarForecast: 0.0, LoadForecast: 0.5,
+		})
+	}
+
+	ctrl := NewController(config, len(forecast), 0.1)
+	decisions := ctrl.Optimize(forecast)
+
+	if len(decisions) != len(forecast) {
+		t.Fatalf("expected %d decisions, got %d", len(forecast), len(decisions))
+	}
+
+	var nightGridCharge float64
+	for i := range 6 {
+		nightGridCharge += decisions[i].BatteryChargeFromGrid
+	}
+	if nightGridCharge <= 0.01 {
+		t.Errorf("expected grid charging during the cheap pre-dawn slots, got %.4f kW total; "+
+			"a sunny tomorrow must not suppress overnight arbitrage", nightGridCharge)
+	}
+
+	// The daytime cloud-cover guarantee must still hold: no grid charging once
+	// the sun is up, because that day's PV alone covers a full charge.
+	for i := 6; i < 12; i++ {
+		if decisions[i].BatteryChargeFromGrid > 1e-9 {
+			t.Errorf("slot %d: BatteryChargeFromGrid = %.4f kW, want 0 (daylight, solar sufficient)",
+				i, decisions[i].BatteryChargeFromGrid)
+		}
+	}
+
+	for i, d := range decisions {
+		t.Logf("slot %d: solar=%.1f imp=%.2f exp=%.2f | fromPV=%.3f fromGrid=%.3f dis=%.3f SOC=%.3f",
+			i, forecast[i].SolarForecast, forecast[i].ImportPrice, forecast[i].ExportPrice,
+			d.BatteryChargeFromPV, d.BatteryChargeFromGrid, d.BatteryDischarge, d.BatterySOC)
+	}
+}
+
+// TestOptimize_DischargeNeverExceedsStoredEnergy guards the second half of the same
+// fault: BatteryDischarge is carried over from a DP pass whose SOC trajectory assumed
+// a grid top-up that later got suppressed. calculateNewSOC silently saturates at
+// BatteryMinSOC, so without an explicit clamp the plan exported energy the battery
+// did not hold (observed live: 20 kW discharge from a battery at 0.2% SOC).
+func TestOptimize_DischargeNeverExceedsStoredEnergy(t *testing.T) {
+	config := SystemConfig{
+		BatteryCapacity:        41.28,
+		BatteryMaxCharge:       20.0,
+		BatteryMaxDischarge:    20.0,
+		BatteryMinSOC:          0.0,
+		BatteryMaxSOC:          1.0,
+		BatteryEfficiency:      0.92,
+		BatteryDegradationCost: 0.01,
+		MaxGridImport:          30.0,
+		MaxGridExport:          30.0,
+		TimeSlotDuration:       0.25,
+	}
+
+	// Mirrors the live forecast shape: an empty battery overnight, a bright day
+	// that more than fills it, and expensive evening slots to discharge into.
+	forecast := []TimeSlot{}
+	ts := int64(1790190000)
+	add := func(n int, solar, imp, exp float64) {
+		for range n {
+			forecast = append(forecast, TimeSlot{
+				Hour: len(forecast), Timestamp: ts + int64(len(forecast))*900,
+				ImportPrice: imp, ExportPrice: exp,
+				SolarForecast: solar, LoadForecast: 0.0,
+			})
+		}
+	}
+	add(38, 0.0, 0.16, 0.10) // night
+	add(48, 9.0, 0.19, 0.13) // sunny day
+	add(10, 0.0, 0.30, 0.24) // evening peak
+	add(12, 0.0, 0.25, 0.19) // night again
+
+	ctrl := NewController(config, len(forecast), 0.001)
+	decisions := ctrl.Optimize(forecast)
+
+	runningSOC := 0.001
+	for i, d := range decisions {
+		available := (runningSOC - config.BatteryMinSOC) * config.BatteryCapacity / config.TimeSlotDuration
+		if d.BatteryDischarge > available+1e-6 {
+			t.Errorf("slot %d: BatteryDischarge = %.3f kW exceeds %.3f kW available at SOC %.4f",
+				i, d.BatteryDischarge, available, runningSOC)
+		}
+
+		totalCharge := d.BatteryChargeFromPV + d.BatteryChargeFromGrid
+		headroom := (config.BatteryMaxSOC - runningSOC) * config.BatteryCapacity / config.TimeSlotDuration
+		if totalCharge > headroom+1e-6 {
+			t.Errorf("slot %d: total charge = %.3f kW exceeds %.3f kW headroom at SOC %.4f",
+				i, totalCharge, headroom, runningSOC)
+		}
+
+		runningSOC = ctrl.calculateNewSOC(runningSOC, totalCharge, d.BatteryDischarge)
+		if math.Abs(d.BatterySOC-runningSOC) > 1e-6 {
+			t.Errorf("slot %d: BatterySOC %.6f != forward-simulated %.6f", i, d.BatterySOC, runningSOC)
+		}
+	}
+}
+
+// TestOptimize_DegenerateBatteryConfigDoesNotPanic is a regression test for a panic
+// reachable from any caller that ran the optimizer with an unpopulated battery
+// config (observed via scheduler.RunMPCOptimize):
+//
+//	panic: runtime error: index out of range [-9223372036854775808]
+//
+// BatteryMaxSOC == BatteryMinSOC makes socStep zero, so socToIndex computed 0/0 = NaN.
+// Converting NaN to int yields the minimum int64 on amd64/arm64, which panicked the
+// moment it was used to index the DP table. A zero BatteryCapacity reached the same
+// state by a different route, poisoning the SOC trajectory with NaN.
+//
+// Such a config describes a system with no usable battery, so the optimizer must
+// return a well-formed idle plan rather than crash the process.
+func TestOptimize_DegenerateBatteryConfigDoesNotPanic(t *testing.T) {
+	forecast := []TimeSlot{
+		{Hour: 0, Timestamp: 1704326400, ImportPrice: 0.10, ExportPrice: 0.05, SolarForecast: 0.0, LoadForecast: 1.0},
+		{Hour: 1, Timestamp: 1704330000, ImportPrice: 0.30, ExportPrice: 0.15, SolarForecast: 2.0, LoadForecast: 1.0},
+		{Hour: 2, Timestamp: 1704333600, ImportPrice: 0.20, ExportPrice: 0.10, SolarForecast: 0.0, LoadForecast: 1.0},
+	}
+
+	cases := []struct {
+		name   string
+		config SystemConfig
+	}{
+		{
+			// Exactly what scheduler.RunMPCOptimize built from a Config that
+			// set no battery fields at all.
+			name:   "all battery fields zero",
+			config: SystemConfig{MaxGridImport: 10, MaxGridExport: 10, TimeSlotDuration: 0.25},
+		},
+		{
+			name: "zero-width SOC range",
+			config: SystemConfig{
+				BatteryCapacity: 10, BatteryMaxCharge: 5, BatteryMaxDischarge: 5,
+				BatteryMinSOC: 0.5, BatteryMaxSOC: 0.5, BatteryEfficiency: 0.9,
+				MaxGridImport: 10, MaxGridExport: 10, TimeSlotDuration: 1.0,
+			},
+		},
+		{
+			name: "zero capacity",
+			config: SystemConfig{
+				BatteryCapacity: 0, BatteryMaxCharge: 5, BatteryMaxDischarge: 5,
+				BatteryMinSOC: 0.0, BatteryMaxSOC: 1.0, BatteryEfficiency: 0.9,
+				MaxGridImport: 10, MaxGridExport: 10, TimeSlotDuration: 1.0,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := NewController(tc.config, len(forecast), tc.config.BatteryMinSOC)
+			decisions := ctrl.Optimize(forecast) // must not panic
+
+			if len(decisions) != len(forecast) {
+				t.Fatalf("expected %d decisions, got %d", len(forecast), len(decisions))
+			}
+
+			for i, d := range decisions {
+				// No battery movement is possible with any of these configs.
+				if d.BatteryChargeFromPV != 0 || d.BatteryChargeFromGrid != 0 || d.BatteryDischarge != 0 {
+					t.Errorf("slot %d: expected an idle battery, got fromPV=%.4f fromGrid=%.4f dis=%.4f",
+						i, d.BatteryChargeFromPV, d.BatteryChargeFromGrid, d.BatteryDischarge)
+				}
+				// Every reported figure must be a real number.
+				for name, v := range map[string]float64{
+					"BatterySOC": d.BatterySOC, "GridImport": d.GridImport,
+					"GridExport": d.GridExport, "Profit": d.Profit,
+				} {
+					if math.IsNaN(v) || math.IsInf(v, 0) {
+						t.Errorf("slot %d: %s is non-finite (%v)", i, name, v)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestSOCToIndex_DegenerateInputs pins the contract socToIndex must satisfy so that
+// its result is always safe to use as a DP table index.
+func TestSOCToIndex_DegenerateInputs(t *testing.T) {
+	ctrl := NewController(SystemConfig{BatteryMinSOC: 0.0, BatteryMaxSOC: 1.0}, 1, 0.5)
+
+	if got := ctrl.socToIndex(0.5, 0); got != 0 {
+		t.Errorf("socToIndex with zero socStep = %d, want 0 (single reachable level)", got)
+	}
+	if got := ctrl.socToIndex(0.5, -0.1); got != 0 {
+		t.Errorf("socToIndex with negative socStep = %d, want 0", got)
+	}
+	if got := ctrl.socToIndex(math.NaN(), 0.002); got != -1 {
+		t.Errorf("socToIndex with NaN soc = %d, want -1 (skipped as out of range)", got)
+	}
+	if got := ctrl.socToIndex(math.Inf(-1), 0.002); got != -1 {
+		t.Errorf("socToIndex with -Inf soc = %d, want -1", got)
+	}
+	if got := ctrl.socToIndex(math.Inf(1), 0.002); got != math.MaxInt {
+		t.Errorf("socToIndex with +Inf soc = %d, want MaxInt (skipped as out of range)", got)
+	}
+	// Sanity: normal inputs still map as before.
+	if got := ctrl.socToIndex(0.5, 0.002); got != 250 {
+		t.Errorf("socToIndex(0.5, 0.002) = %d, want 250", got)
 	}
 }
