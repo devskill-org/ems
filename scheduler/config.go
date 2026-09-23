@@ -91,6 +91,24 @@ type Config struct {
 	BatteryBalancingEfficiencyFactor float64 `json:"battery_balancing_efficiency_factor"` // multiplier on BatteryEfficiency during CV phase (e.g. 0.3); 0 disables
 	BatteryBalancingBonus            float64 `json:"battery_balancing_bonus"`             // one-time profit bonus awarded when battery first reaches BatteryMaxSOC within the horizon; 0 disables
 
+	// Top-of-charge hold parameters.
+	//
+	// When the battery sits at/above BatteryBalancingSOCThreshold and weekly
+	// cell-balancing is not due, opportunistic charging is blocked so the pack
+	// is not pushed into its low-efficiency CV phase.  Releasing that block the
+	// moment SOC dips back below the threshold produces a limit cycle: the
+	// inverter's auxiliary draw slowly depletes the pack, charging is
+	// re-enabled, PV tops it straight back up, and the block re-engages — the
+	// battery micro-cycles around the threshold for hours.
+	//
+	// BatteryBalancingSOCReleaseBand adds hysteresis: once blocked, charging is
+	// only re-enabled after SOC falls below (threshold - releaseBand).
+	// BatteryTopHoldPower allows a small trickle while blocked so the inverter's
+	// own consumption is served from PV/grid rather than from the pack, which
+	// removes the drift that drives the cycle in the first place.
+	BatteryBalancingSOCReleaseBand float64 `json:"battery_balancing_soc_release_band"` // SOC hysteresis band (0-1) below BatteryBalancingSOCThreshold; 0 disables hysteresis
+	BatteryTopHoldPower            float64 `json:"battery_top_hold_power"`             // kW trickle charge permitted while the top-of-charge block is engaged; 0 forces a hard idle
+
 	// Price adjustments
 	ImportPriceOperatorFee float64 `json:"import_price_operator_fee"` // EUR/MWh - Operator fee for import
 	ImportPriceDeliveryFee float64 `json:"import_price_delivery_fee"` // EUR/MWh - Delivery fee for import
@@ -151,6 +169,8 @@ func DefaultConfig() *Config {
 		BatteryBalancingSOCThreshold:     0.998,   // CV phase starts at 99.8%
 		BatteryBalancingEfficiencyFactor: 0.1,     // ~10× more input energy needed in CV phase
 		BatteryBalancingBonus:            1.1,     // $1.1 one-time optimisation bonus for reaching BatteryMaxSOC
+		BatteryBalancingSOCReleaseBand:   0.01,    // resume charging only once SOC drops 1% below the threshold (98.8% by default)
+		BatteryTopHoldPower:              0.2,     // 0.2 kW (200 W) trickle to cover inverter auxiliary draw while holding at the top
 	}
 }
 
@@ -411,6 +431,23 @@ func (c *Config) Validate() error {
 
 	if c.BatteryBalancingBonus < 0 {
 		return fmt.Errorf("battery_balancing_bonus must be non-negative, got: %f", c.BatteryBalancingBonus)
+	}
+
+	if c.BatteryBalancingSOCReleaseBand < 0 || c.BatteryBalancingSOCReleaseBand > 1 {
+		return fmt.Errorf("battery_balancing_soc_release_band must be between 0 and 1, got: %f", c.BatteryBalancingSOCReleaseBand)
+	}
+
+	if c.BatteryBalancingSOCThreshold != 0 && c.BatteryBalancingSOCReleaseBand >= c.BatteryBalancingSOCThreshold {
+		return fmt.Errorf("battery_balancing_soc_release_band (%f) must be smaller than battery_balancing_soc_threshold (%f), otherwise charging would never resume",
+			c.BatteryBalancingSOCReleaseBand, c.BatteryBalancingSOCThreshold)
+	}
+
+	if c.BatteryTopHoldPower < 0 {
+		return fmt.Errorf("battery_top_hold_power must be non-negative, got: %f", c.BatteryTopHoldPower)
+	}
+
+	if c.BatteryTopHoldPower > c.BatteryMaxCharge {
+		return fmt.Errorf("battery_top_hold_power (%f) must not exceed battery_max_charge (%f)", c.BatteryTopHoldPower, c.BatteryMaxCharge)
 	}
 
 	// Validate that MaxGridImport can handle battery charging with preheating

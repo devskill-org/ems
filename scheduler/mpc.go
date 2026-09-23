@@ -668,6 +668,49 @@ type batteryAction struct {
 	setCharge      bool
 	setDischarge   bool
 	logMsg         string
+
+	// topBlocked reports the state of the top-of-charge latch after this
+	// decision.  The caller must persist it and feed it back in via
+	// topSOCGuard.blocked on the next call so the hysteresis works.
+	topBlocked bool
+}
+
+// topSOCGuard configures the top-of-charge hold that keeps the battery out of
+// its low-efficiency CV/balancing phase outside the weekly balancing window.
+//
+// It is a Schmitt trigger on SOC:
+//
+//	engage  when SOC >= threshold
+//	release when SOC <  threshold - releaseBand
+//
+// Without the releaseBand the guard chatters: blocking charge lets the
+// inverter's auxiliary load drain the pack a few tenths of a percent, SOC drops
+// back under the threshold, charging is re-enabled, PV refills it in a single
+// slot, and the guard engages again — a ~30-45 minute limit cycle that keeps
+// the pack pinned at the very top while micro-cycling it.
+//
+// holdPower is the trickle (kW) still permitted while engaged.  A hard 0 forces
+// the inverter to serve its own auxiliary consumption from the battery, which
+// is what produces the downward drift; allowing a small charge lets that draw
+// come from PV or the grid instead so SOC simply holds.
+type topSOCGuard struct {
+	threshold   float64 // SOC (0-1) at/above which charging is blocked; 0 disables the guard
+	releaseBand float64 // SOC hysteresis band below threshold; 0 means release as soon as SOC < threshold
+	holdPower   float64 // kW trickle permitted while blocked
+	blocked     bool    // latch state carried over from the previous execution
+}
+
+// engaged applies the Schmitt trigger to the given SOC and reports whether
+// charging should be blocked.
+func (g topSOCGuard) engaged(soc float64) bool {
+	if g.threshold <= 0 {
+		return false
+	}
+	if g.blocked {
+		// Stay blocked until SOC falls clear of the hysteresis band.
+		return soc >= g.threshold-g.releaseBand
+	}
+	return soc >= g.threshold
 }
 
 // decideBatteryAction translates an MPC control decision into a concrete battery
@@ -679,11 +722,11 @@ type batteryAction struct {
 // PV-only self-use mode instead.  Pass 0 to disable the gate (e.g. in tests
 // that are not exercising the cloud-recovery logic).
 //
-// balancingSOCThreshold is the SOC (0-1) at/above which the battery enters its
-// low-efficiency CV/balancing phase (config.BatteryBalancingSOCThreshold).
-// Pass 0 to disable the related guard in the default case below (e.g. in
-// tests, or when the feature is disabled in config).
-func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recentAvgPV float64, balancingSOCThreshold float64) batteryAction {
+// guard configures the top-of-charge hold applied in the default case below.
+// Pass the zero value to disable it (e.g. in tests, or when the feature is
+// disabled in config).
+func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recentAvgPV float64, guard topSOCGuard) batteryAction {
+
 	switch {
 	case decision.BatteryChargeFromGrid > 0.01:
 		totalPlannedCharge := decision.BatteryChargeFromPV + decision.BatteryChargeFromGrid
@@ -771,13 +814,24 @@ func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recen
 		// headroom up to BatteryMaxSOC. Doing so would push the battery into
 		// its low-efficiency CV/balancing phase every time PV surplus is
 		// available, rather than only once a week as intended.
+		//
+		// The guard is a Schmitt trigger (see topSOCGuard): it engages at the
+		// threshold and only releases once SOC has fallen clear of the
+		// hysteresis band, and it leaves a small trickle enabled so the
+		// inverter's auxiliary draw does not slowly empty the pack. Together
+		// these stop the battery micro-cycling around the threshold.
 		chargeLimit := maxCharge
 		logMsg := fmt.Sprintf("Setting battery to SELF-CONSUMPTION mode (no active charge/discharge planned, absorbing any actual PV excess up to %.1f kW): GridImport: %.1f kW, GridExport: %.1f kW",
 			maxCharge, decision.GridImport, decision.GridExport)
-		if balancingSOCThreshold > 0 && !decision.BalancingNeeded && decision.BatterySOC >= balancingSOCThreshold {
-			chargeLimit = 0
-			logMsg = fmt.Sprintf("Setting battery to SELF-CONSUMPTION mode (SOC %.1f%% already at/above balancing threshold %.1f%% and balancing not currently needed — capping charge at 0 to avoid unnecessary CV/balancing): GridImport: %.1f kW, GridExport: %.1f kW",
-				decision.BatterySOC*100, balancingSOCThreshold*100, decision.GridImport, decision.GridExport)
+
+		topBlocked := false
+		if !decision.BalancingNeeded {
+			topBlocked = guard.engaged(decision.BatterySOC)
+		}
+		if topBlocked {
+			chargeLimit = math.Min(guard.holdPower, maxCharge)
+			logMsg = fmt.Sprintf("Setting battery to SELF-CONSUMPTION mode (SOC %.1f%% within top-of-charge hold: engage >= %.1f%%, release < %.1f%%, balancing not currently needed — charge capped at %.2f kW to hold SOC without entering the CV/balancing phase): GridImport: %.1f kW, GridExport: %.1f kW",
+				decision.BatterySOC*100, guard.threshold*100, (guard.threshold-guard.releaseBand)*100, chargeLimit, decision.GridImport, decision.GridExport)
 		}
 		return batteryAction{
 			mode:           2,
@@ -786,6 +840,7 @@ func decideBatteryAction(decision *mpc.ControlDecision, maxCharge float64, recen
 			setCharge:      true,
 			setDischarge:   true,
 			logMsg:         logMsg,
+			topBlocked:     topBlocked,
 		}
 	}
 }
@@ -827,8 +882,23 @@ func (s *MinerScheduler) executeMPCDecision(ctx context.Context, decision *mpc.C
 	const pvGateWindow = 5 * time.Minute
 	recentAvgPV := s.dataSamples.AveragePVPowerLast(pvGateWindow)
 
-	action := decideBatteryAction(decision, config.BatteryMaxCharge, recentAvgPV, config.BatteryBalancingSOCThreshold)
+	s.mu.RLock()
+	topBlocked := s.topChargeBlocked
+	s.mu.RUnlock()
+
+	guard := topSOCGuard{
+		threshold:   config.BatteryBalancingSOCThreshold,
+		releaseBand: config.BatteryBalancingSOCReleaseBand,
+		holdPower:   config.BatteryTopHoldPower,
+		blocked:     topBlocked,
+	}
+
+	action := decideBatteryAction(decision, config.BatteryMaxCharge, recentAvgPV, guard)
 	s.logger.Print(action.logMsg)
+
+	s.mu.Lock()
+	s.topChargeBlocked = action.topBlocked
+	s.mu.Unlock()
 
 	// Enforce hardware-level grid export limit based on the current export price.
 	// When the export price is negative (or zero), set the inverter's grid-point

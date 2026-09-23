@@ -133,21 +133,25 @@ func TestCVPhase_ReducedSOCIncrease(t *testing.T) {
 
 	// Use a small charge power so neither SOC trajectory overshoots BatteryMaxSOC
 	// and gets clamped, which would mask the efficiency difference we are testing.
-	// Below threshold: 0.989 + 0.01*1.0*0.9/10 = 0.9899  (< 1.0 ✓)
-	// At threshold:    0.999 + 0.01*1.0*0.27/10 = 0.99927 (< 1.0 ✓)
+	//
+	// Charge power is DC-side, so BatteryEfficiency does NOT appear here — it is
+	// accounted for on the AC side of the power balance. Only the CV-phase
+	// derate applies:
+	//   Below threshold: 0.989 + 0.01*1.0*1.0/10  = 0.99    (< 1.0 ✓)
+	//   At threshold:    0.999 + 0.01*1.0*0.3/10  = 0.9993  (< 1.0 ✓)
 	chargeKW := 0.01 // kW for one hour
 
-	// ── Below threshold: normal efficiency ──────────────────────────────────
+	// ── Below threshold: no derate ──────────────────────────────────────────
 	socBelow := config.BatteryBalancingSOCThreshold - 0.01 // e.g. 98.9 %
 	newSOCBelow := ctrl.calculateNewSOC(socBelow, chargeKW, 0)
 
-	wantBelow := socBelow + chargeKW*config.TimeSlotDuration*config.BatteryEfficiency/config.BatteryCapacity
+	wantBelow := socBelow + chargeKW*config.TimeSlotDuration/config.BatteryCapacity
 	if math.Abs(newSOCBelow-wantBelow) > 1e-9 {
 		t.Errorf("Below threshold: calculateNewSOC=%.8f, want %.8f", newSOCBelow, wantBelow)
 	}
 
 	// ── At threshold: reduced (CV-phase) efficiency ──────────────────────────
-	cvEff := config.BatteryEfficiency * config.BatteryBalancingEfficiencyFactor
+	cvEff := config.BatteryBalancingEfficiencyFactor
 	socAt := config.BatteryBalancingSOCThreshold
 	newSOCAt := ctrl.calculateNewSOC(socAt, chargeKW, 0)
 

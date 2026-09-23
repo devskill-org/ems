@@ -131,6 +131,11 @@ type MinerScheduler struct {
 	mpcDecisions         []mpc.ControlDecision
 	lastExecutedDecision *mpc.ControlDecision // Tracks the last successfully executed decision
 
+	// Latch state for the top-of-charge hold (see topSOCGuard). Persisting it
+	// between executions is what gives the SOC guard its hysteresis; without it
+	// the guard chatters and the battery micro-cycles at the top of its range.
+	topChargeBlocked bool
+
 	// EV session state — tracks whether a DC charging cable is currently
 	// connected so that the fast-poll path can apply battery support mode
 	// immediately on plug-in without waiting for the next MPC execution tick.

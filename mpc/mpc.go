@@ -522,14 +522,14 @@ func (mpc *Controller) generateFeasibleDecisions(currentSOC float64, currentBatt
 		}
 		socGap := mpc.Config.BatteryMaxSOC - currentSOC
 		if socGap > 1e-9 {
-			// Use the same balancing-aware efficiency as calculateNewSOC so that
-			// the top-up charge correctly accounts for the extra energy required
-			// in the CV/balancing phase when the battery is nearly full.
-			efficiency := mpc.Config.BatteryEfficiency
+			// Use the same DC-side, balancing-aware efficiency as calculateNewSOC
+			// so that the top-up charge correctly accounts for the extra energy
+			// required in the CV/balancing phase when the battery is nearly full.
+			efficiency := 1.0
 			if mpc.Config.BatteryBalancingSOCThreshold > 0 &&
 				mpc.Config.BatteryBalancingEfficiencyFactor > 0 &&
 				currentSOC >= mpc.Config.BatteryBalancingSOCThreshold {
-				efficiency *= mpc.Config.BatteryBalancingEfficiencyFactor
+				efficiency = mpc.Config.BatteryBalancingEfficiencyFactor
 			}
 			// Invert calculateNewSOC: charge needed so that
 			//   currentSOC + charge * duration * efficiency / capacity == BatteryMaxSOC
@@ -689,14 +689,15 @@ func (mpc *Controller) canCharge(soc, charge float64) bool {
 		timeSlotDuration = 1.0
 	}
 
-	// Use the same balancing-aware efficiency as calculateNewSOC: in the CV/balancing
-	// phase near 100% SOC the same charge power produces less SOC increase, so more
-	// charge actions remain valid (they won't overshoot BatteryMaxSOC).
-	efficiency := mpc.Config.BatteryEfficiency
+	// Use the same DC-side convention and balancing-aware derate as
+	// calculateNewSOC so that both functions agree on how much the SOC actually
+	// rises.  BatteryEfficiency is deliberately NOT applied here: it is already
+	// accounted for on the AC side of the power balance.
+	efficiency := 1.0
 	if mpc.Config.BatteryBalancingSOCThreshold > 0 &&
 		mpc.Config.BatteryBalancingEfficiencyFactor > 0 &&
 		soc >= mpc.Config.BatteryBalancingSOCThreshold {
-		efficiency *= mpc.Config.BatteryBalancingEfficiencyFactor
+		efficiency = mpc.Config.BatteryBalancingEfficiencyFactor
 	}
 
 	// Convert power (kW) to energy (kWh) using the same formula as calculateNewSOC:
@@ -727,17 +728,27 @@ func (mpc *Controller) calculateNewSOC(currentSOC, charge, discharge float64) fl
 		timeSlotDuration = 1.0
 	}
 
-	// Apply reduced charging efficiency in the CV/balancing phase.
-	// When currentSOC is at or above BatteryBalancingSOCThreshold the battery is in
-	// constant-voltage mode: cells are being balanced and more input energy is needed
-	// per unit of SOC increase.  The efficiency factor captures this extra cost so
-	// that the optimizer correctly prices charging into the very top of the SOC range.
-	efficiency := mpc.Config.BatteryEfficiency
+	// Charge/discharge powers are DC-side (battery terminal) quantities, which
+	// is the convention the power balance in generateFeasibleDecisions uses:
+	// charging draws charge/BatteryEfficiency from the AC bus and discharging
+	// delivers discharge*BatteryEfficiency to it.  The conversion loss is
+	// therefore already accounted for on the AC side, and the DC-side energy
+	// that actually moves in or out of the cells is simply power * duration.
+	//
+	// Applying BatteryEfficiency again here would double-count the charging
+	// loss: bus->SOC would be modelled at efficiency^2 while SOC->bus stayed at
+	// efficiency, giving an asymmetric round trip (0.778 instead of 0.846 at
+	// efficiency=0.92) that made charging look worse than discharging.
+	//
+	// The CV/balancing derate is a separate physical effect and still applies:
+	// at or above BatteryBalancingSOCThreshold the cells are being balanced and
+	// far more input energy is needed per unit of SOC gain.
+	efficiency := 1.0
 	if charge > 0 &&
 		mpc.Config.BatteryBalancingSOCThreshold > 0 &&
 		mpc.Config.BatteryBalancingEfficiencyFactor > 0 &&
 		currentSOC >= mpc.Config.BatteryBalancingSOCThreshold {
-		efficiency *= mpc.Config.BatteryBalancingEfficiencyFactor
+		efficiency = mpc.Config.BatteryBalancingEfficiencyFactor
 	}
 
 	// Convert power (kW) to energy (kWh) by multiplying by time slot duration
