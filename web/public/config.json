@@ -1,4 +1,5 @@
 {
+  "hide_miners": true,
   "miner_names": {
     "020100008c675349": "Miner 3",
     "020100001a0f0bc8": "Miner 1",
