@@ -5,6 +5,8 @@ import "./ConfigMenu.css";
 
 interface ConfigMenuProps {
   onClose: () => void;
+  /** Hide miner-related sections and fields. */
+  hideMiners?: boolean;
 }
 
 type FieldType = "text" | "number" | "boolean" | "select" | "duration" | "numericSelect";
@@ -618,7 +620,25 @@ function ConfigField({ def, value, onChange }: FieldProps) {
 
 // ─── Main component ─────────────────────────────────────────────────────────
 
-export function ConfigMenu({ onClose }: ConfigMenuProps) {
+const MINER_SECTION_TITLES = new Set(["Miner Power Modes"]);
+const MINER_FIELD_KEYS = new Set<keyof EmsConfig>([
+  "miners_state_check_interval",
+  "miner_discovery_interval",
+  "miner_max_consecutive_errors",
+  "miner_timeout",
+]);
+
+const MINERLESS_SECTIONS: Section[] = SECTIONS.filter(
+  (s) => !MINER_SECTION_TITLES.has(s.title),
+)
+  .map((s) => ({
+    ...s,
+    fields: s.fields.filter((f) => !MINER_FIELD_KEYS.has(f.key)),
+  }))
+  .filter((s) => s.fields.length > 0);
+
+export function ConfigMenu({ onClose, hideMiners = false }: ConfigMenuProps) {
+  const sections = hideMiners ? MINERLESS_SECTIONS : SECTIONS;
   const {
     config,
     loading,
@@ -680,7 +700,7 @@ export function ConfigMenu({ onClose }: ConfigMenuProps) {
   }, [onClose]);
 
   const currentSection =
-    SECTIONS.find((s) => s.title === activeSection) ?? SECTIONS[0];
+    sections.find((s) => s.title === activeSection) ?? sections[0];
 
   return (
     <div
@@ -734,7 +754,7 @@ export function ConfigMenu({ onClose }: ConfigMenuProps) {
         <div className="config-modal-body">
           {/* Sidebar navigation */}
           <nav className="config-nav">
-            {SECTIONS.map((section) => (
+            {sections.map((section) => (
               <button
                 key={section.title}
                 type="button"

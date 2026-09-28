@@ -136,33 +136,7 @@ function App() {
       </header>
 
       <main className="main">
-        <section className="card">
-          <h2>Scheduler Status</h2>
-          <div className="info-grid">
-            <InfoItem
-              label="Running:"
-              value={health?.scheduler.is_running ? "Yes" : "No"}
-              valueClassName={
-                health?.scheduler.is_running ? "value-success" : "value-error"
-              }
-            />
-            <InfoItem label="Network:" value={health?.scheduler.network} />
-            <InfoItem label="Miners Count:" value={status?.miners.count || 0} />
-            <InfoItem
-              label="Market Data:"
-              value={
-                health?.scheduler.has_market_data
-                  ? "Available"
-                  : "Not Available"
-              }
-              valueClassName={
-                health?.scheduler.has_market_data
-                  ? "value-success"
-                  : "value-warning"
-              }
-            />
-          </div>
-        </section>
+        <MetricsSummary />
 
         {currentPrice !== undefined && priceLimit !== undefined && (
           <section className="card">
@@ -180,6 +154,7 @@ function App() {
           </section>
         )}
 
+        {!config.hide_miners && (
         <section className="card">
           <h2>
             Discovered Miners
@@ -257,6 +232,7 @@ function App() {
             <p className="no-miners">No miners discovered yet.</p>
           )}
         </section>
+        )}
 
         <section className="card devices-section">
           <h2>Devices</h2>
@@ -360,7 +336,38 @@ function App() {
 
         <MPCDecisions decisions={health?.scheduler.mpc_decisions} />
 
-        <MetricsSummary />
+        <section className="card">
+          <h2>Scheduler Status</h2>
+          <div className="info-grid">
+            <InfoItem
+              label="Running:"
+              value={health?.scheduler.is_running ? "Yes" : "No"}
+              valueClassName={
+                health?.scheduler.is_running ? "value-success" : "value-error"
+              }
+            />
+            <InfoItem label="Network:" value={health?.scheduler.network} />
+            {!config.hide_miners && (
+              <InfoItem
+                label="Miners Count:"
+                value={status?.miners.count || 0}
+              />
+            )}
+            <InfoItem
+              label="Market Data:"
+              value={
+                health?.scheduler.has_market_data
+                  ? "Available"
+                  : "Not Available"
+              }
+              valueClassName={
+                health?.scheduler.has_market_data
+                  ? "value-success"
+                  : "value-warning"
+              }
+            />
+          </div>
+        </section>
 
         <section className="card system-info">
           <h2>System Information</h2>
@@ -390,7 +397,12 @@ function App() {
         <DemoInfo onClose={() => setShowDemoInfo(false)} />
       )}
 
-      {showConfig && <ConfigMenu onClose={() => setShowConfig(false)} />}
+      {showConfig && (
+        <ConfigMenu
+          onClose={() => setShowConfig(false)}
+          hideMiners={config.hide_miners}
+        />
+      )}
 
       {showMarketDataUpload && (
         <MarketDataUpload onClose={() => setShowMarketDataUpload(false)} />
