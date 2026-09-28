@@ -8,6 +8,12 @@ import (
 	"github.com/devskill-org/ems/entsoe"
 )
 
+// marketDataRetryInterval is how long a partial (today-only) market data document
+// is cached when the next day's prices have not been published by ENTSO-E yet.
+// It is long enough to avoid hammering the Transparency Platform every minute,
+// and short enough to pick up the prices soon after they appear.
+const marketDataRetryInterval = 15 * time.Minute
+
 // StoreMarketDataXML parses the given XML bytes and stores the resulting document
 // in the XML document cache under the given date key (YYYY-MM-DD format).
 func (s *MinerScheduler) StoreMarketDataXML(date string, xmlData []byte) error {
@@ -99,9 +105,17 @@ func (s *MinerScheduler) GetMarketData(ctx context.Context) (*entsoe.Publication
 
 	// Perform the network download WITHOUT holding the lock so other goroutines
 	// (GetConfig, runStateCheck, etc.) are never blocked during I/O.
-	newDoc, err := entsoe.DownloadPublicationMarketData(ctx, s.config.SecurityToken, s.config.URLFormat, location, fetchNextDay, s.xmlCache)
+	newDoc, nextDayIncluded, err := entsoe.DownloadPublicationMarketData(ctx, s.config.SecurityToken, s.config.URLFormat, location, fetchNextDay, s.xmlCache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download PublicationMarketData: %w", err)
+	}
+
+	// ENTSO-E has not published tomorrow's day-ahead prices yet. Caching this
+	// partial (today-only) document until tomorrow 13:30 would suppress every
+	// subsequent refresh for ~24h, so expire it quickly and retry instead.
+	if !nextDayIncluded {
+		nextExpiry = now.Add(marketDataRetryInterval)
+		s.logger.Printf("Next-day prices not published yet, retrying at %s", nextExpiry.Format(time.RFC3339))
 	}
 
 	// Re-acquire the write lock only to store the result.

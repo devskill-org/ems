@@ -49,7 +49,12 @@ type DownloadOptions struct {
 // DownloadPublicationMarketData downloads and decodes publication market data for the current and next day if needed.
 // fetchNextDay indicates whether to also download data for the next day (e.g. when it is past 13:30).
 // cache is an optional XMLDocumentCache; when non-nil, cached entries are returned instead of fetching from the network.
-func DownloadPublicationMarketData(ctx context.Context, securityToken string, urlFormat string, location *time.Location, fetchNextDay bool, cache *XMLDocumentCache) (*PublicationMarketData, error) {
+//
+// The second return value reports whether the returned document already covers the next day.
+// It is false when fetchNextDay is true but ENTSO-E has not published tomorrow's prices yet,
+// which lets callers shorten their cache lifetime and retry soon instead of caching a
+// partial (today-only) document for the rest of the day.
+func DownloadPublicationMarketData(ctx context.Context, securityToken string, urlFormat string, location *time.Location, fetchNextDay bool, cache *XMLDocumentCache) (*PublicationMarketData, bool, error) {
 
 	now := time.Now().In(location)
 	client := NewAPIClient()
@@ -74,7 +79,7 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 		var rawXML []byte
 		marketDocument, rawXML, err = downloadWithTimeout(ctx, url, opts)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if cache != nil {
 			cache.StoreDocumentWithRaw(todayKey, marketDocument, rawXML, CacheSourceDownload)
@@ -106,7 +111,7 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 				fmt.Printf("No market data published yet for %s: %v\n", tomorrowKey, err)
 				marketDocumentNextDay = nil
 			} else {
-				return nil, err
+				return nil, false, err
 			}
 		} else if cache != nil {
 			cache.StoreDocumentWithRaw(tomorrowKey, marketDocumentNextDay, rawXMLNextDay, CacheSourceDownload)
@@ -118,7 +123,10 @@ func DownloadPublicationMarketData(ctx context.Context, securityToken string, ur
 		marketDocument = mergePublicationMarketData(marketDocument, marketDocumentNextDay)
 	}
 
-	return marketDocument, nil
+	// The result is complete unless the caller asked for the next day and it is still missing.
+	nextDayIncluded := !fetchNextDay || marketDocumentNextDay != nil
+
+	return marketDocument, nextDayIncluded, nil
 }
 
 // requestTimeout bounds a single ENTSO-E API call. The Transparency Platform can be
